@@ -73,13 +73,14 @@ server.listen(0, '127.0.0.1', async () => {
     const t0 = Date.now();
     await page.goto(url);
     await page.waitForFunction(
-      (n) => window.__hakoniwa && window.__hakoniwa.frames >= n,
+      (n) => window.__hakoniwa && window.__hakoniwa.frames >= n && !window.__hakoniwa.busy,
       Number(opt.frames),
       { timeout: Number(opt.timeout) },
     );
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
     await page.screenshot({ path: out });
-    console.log(`${out} (${width}x${height}, ${Date.now() - t0} ms)`);
+    const info = await page.evaluate(() => JSON.stringify({ stats: window.__hakoniwa.stats, levels: window.__hakoniwa.levels }));
+    console.log(`${out} (${width}x${height}, ${Date.now() - t0} ms) ${info}`);
   } catch (e) {
     failed = true;
     console.log(`[error] ${e.message}`);
