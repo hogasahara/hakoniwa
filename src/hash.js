@@ -38,4 +38,9 @@ export const SEED = {
   character: 0x7e11a5b3,
   column: 0x2d8f6a4c,
   parts: 0x6b0f3e97,
+  grow: 0x3f6c2a81,
+  damage: 0x5e9d0b43,
+  climate: 0x19a7f5c2,
+  storm: 0x4c2e8b1d,
+  habit: 0x71d3a96e,
 };

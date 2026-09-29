@@ -6,54 +6,19 @@
 //   2〜4 … 柱を 2×2、4×4、8×8 ずつまとめた要約（遠いとき）
 // どの段も「座標から中身を決める関数」なので、他の区画や生成の順番に左右されない。
 // 遠い段は細かい段の要約から作る（高さと色の平均）。
+//
+// 区画の量（state.js の S と D）が柱に効く：
+//   S 建て広げた量 …… 柱ごとに「S が閾値を超えたら伸びきる、でなければ低い」
+//   D 損傷 …… 柱ごとに「D が閾値を超えたら上が崩れて黒ずむ」
+// 閾値は柱ごとのハッシュ。判断は整数の比較だけ。
 import * as THREE from 'three';
 import { hash, unit, chance, SEED } from './hash.js';
-import { massHeight, rustiness } from './field.js';
+import {
+  CELL, SUB, BASE, GRAY, RUST, MIN_FACTOR,
+  column, effectiveColumns, expectedColor, scale,
+} from './columns.js';
 
-export const CELL = 8; // 小区画の幅（メートル）
-export const SUB = 8; // 区画一辺の小区画の数
-export const CHUNK = CELL * SUB; // 区画の幅
-export const LEVELS = 5;
-const BASE = -4; // 柱の根元（海面より下）
-
-const GRAY = [0.42, 0.43, 0.44];
-const RUST = [0.4, 0.24, 0.15];
-
-// 小区画 (gi, gj)（世界全体での通し番号）の柱
-export function column(gi, gj) {
-  const x = (gi + 0.5) * CELL;
-  const z = (gj + 0.5) * CELL;
-  const m = massHeight(x, z);
-  if (m < 3) return { h: 0, c: 0 };
-  const h = m * (0.7 + 0.6 * unit(hash(SEED.column, gi, gj)));
-  return { h, c: rustiness(x, z) };
-}
-
-// 性格 c の場所の部品の色の期待値
-function expectedColor(c, out) {
-  for (let i = 0; i < 3; i++) out[i] = GRAY[i] + (RUST[i] - GRAY[i]) * c;
-  return out;
-}
-
-// 区画の柱の一覧（キャッシュする。小さい）
-const columnCache = new Map();
-export function chunkColumns(cx, cz) {
-  const key = cx + ',' + cz;
-  let cols = columnCache.get(key);
-  if (!cols) {
-    cols = { h: new Float32Array(SUB * SUB), c: new Float32Array(SUB * SUB), max: 0 };
-    for (let j = 0; j < SUB; j++) {
-      for (let i = 0; i < SUB; i++) {
-        const col = column(cx * SUB + i, cz * SUB + j);
-        cols.h[j * SUB + i] = col.h;
-        cols.c[j * SUB + i] = col.c;
-        if (col.h > cols.max) cols.max = col.h;
-      }
-    }
-    columnCache.set(key, cols);
-  }
-  return cols;
-}
+export { CELL, SUB, CHUNK, LEVELS, chunkColumns } from './columns.js';
 
 // 箱を頂点配列に書き込む。底面は省く
 class BoxWriter {
@@ -91,22 +56,22 @@ class BoxWriter {
 }
 
 // 部品 1 つの色：性格 c の確率で錆、明るさを揺らす（平均は期待値に一致）
-function partColor(gi, gj, k, c, out) {
+function partColor(gi, gj, k, c, dark, out) {
   const h = hash(SEED.parts + 7, gi, gj, k);
   const base = chance(h, c) ? RUST : GRAY;
   const j = 0.8 + 0.4 * unit(hash(SEED.parts + 8, gi, gj, k));
-  for (let i = 0; i < 3; i++) out[i] = base[i] * j;
+  for (let i = 0; i < 3; i++) out[i] = base[i] * j * dark;
   return out;
 }
 
 // 段 0：柱 1 本を部品の積み重ねに分ける
-function writeParts(w, gi, gj, H, c) {
+function writeParts(w, gi, gj, H, c, dark) {
   const x0 = gi * CELL;
   const z0 = gj * CELL;
   const rgb = [0, 0, 0];
 
   // 芯：部品の隙間から向こうが抜けて見えないように
-  w.box(x0 + 2, BASE, z0 + 2, x0 + 6, H * 0.92, z0 + 6, expectedColor(c, rgb).map((v) => v * 0.6));
+  w.box(x0 + 2, BASE, z0 + 2, x0 + 6, H * 0.92, z0 + 6, expectedColor(c, rgb).map((v) => v * 0.6 * dark));
 
   let y = BASE;
   for (let k = 0; y < H - 1 && k < 160; k++) {
@@ -119,7 +84,7 @@ function writeParts(w, gi, gj, H, c) {
     const pd = 3 + (((h1 >>> 16) & 0xff) / 255) * 5.5;
     const ox = x0 - 1 + unit(h2) * (CELL + 2 - pw);
     const oz = z0 - 1 + unit(h3) * (CELL + 2 - pd);
-    partColor(gi, gj, k, c, rgb);
+    partColor(gi, gj, k, c, dark, rgb);
     w.box(ox, y, oz, ox + pw, y + ph, oz + pd, rgb);
 
     const h4 = hash(SEED.parts + 3, gi, gj, k);
@@ -140,7 +105,7 @@ function writeParts(w, gi, gj, H, c) {
       const east = (h5 & 1) === 0;
       const n = east ? column(gi + 1, gj) : column(gi, gj + 1);
       const by = y + ph * 0.5;
-      if (n.h > by + 2) {
+      if (n.h * MIN_FACTOR > by + 2) {
         const s = 0.6 + (h5 >>> 8 & 3) * 0.3;
         if (east) w.box(x0 + 4, by, z0 + 4 - s, x0 + 4 + CELL, by + s, z0 + 4 + s, rgb);
         else w.box(x0 + 4 - s, by, z0 + 4, x0 + 4 + s, by + s, z0 + 4 + CELL, rgb);
@@ -154,26 +119,26 @@ function writeParts(w, gi, gj, H, c) {
   if (chance(hp, 0.3)) {
     const px = x0 + unit(hash(SEED.parts + 6, gi, gj)) * (CELL - 0.6);
     const top = H * (0.3 + 0.7 * unit(hp));
-    w.box(px, BASE, z0 - 0.4, px + 0.6, top, z0 + 0.2, expectedColor(c, rgb));
+    w.box(px, BASE, z0 - 0.4, px + 0.6, top, z0 + 0.2, scale(expectedColor(c, rgb), dark));
   }
   // 先端の柱（アンテナのようなもの）
   const hm = hash(SEED.parts + 9, gi, gj);
   if (H > 40 && chance(hm, 0.15)) {
     const len = 8 + unit(hash(SEED.parts + 10, gi, gj)) * 20;
-    w.box(x0 + 3.8, H - 2, z0 + 3.8, x0 + 4.2, H + len, z0 + 4.2, expectedColor(c, rgb));
+    w.box(x0 + 3.8, H - 2, z0 + 3.8, x0 + 4.2, H + len, z0 + 4.2, scale(expectedColor(c, rgb), dark));
   }
 }
 
-// 段 level の区画の形を作る
-export function buildChunk(cx, cz, level) {
-  const cols = chunkColumns(cx, cz);
+// 段 level の区画の形を作る。state は区画の量 { S, D }
+export function buildChunk(cx, cz, level, state) {
+  const cols = effectiveColumns(cx, cz, state);
   const w = new BoxWriter();
   const rgb = [0, 0, 0];
   if (level === 0) {
     for (let j = 0; j < SUB; j++) {
       for (let i = 0; i < SUB; i++) {
         const H = cols.h[j * SUB + i];
-        if (H > 0) writeParts(w, cx * SUB + i, cz * SUB + j, H, cols.c[j * SUB + i]);
+        if (H > 0) writeParts(w, cx * SUB + i, cz * SUB + j, H, cols.c[j * SUB + i], cols.dark[j * SUB + i]);
       }
     }
   } else {
@@ -195,7 +160,7 @@ export function buildChunk(cx, cz, level) {
               mi = i;
               mj = j;
             }
-            expectedColor(cols.c[j * SUB + i], tmp);
+            scale(expectedColor(cols.c[j * SUB + i], tmp), cols.dark[j * SUB + i]);
             for (let q = 0; q < 3; q++) rgb[q] += tmp[q] * H;
           }
         }

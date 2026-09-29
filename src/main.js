@@ -6,13 +6,19 @@
 //   cam=x,y,z,tx,ty,tz  カメラの位置と注視点
 //   lod=0..4      全区画の段を固定する（段どうしの辻褄を比べる）
 //   hud=1         区画の数などを画面に出す
+//   at=日時       世界の時刻をこの日時から始める（例 at=2027-03-01T12:00Z）
+//   speed=倍率    世界の時刻の進む速さ（例 speed=3600 で 1 秒に 1 時間）
 import * as THREE from 'three';
 import { ChunkView } from './view.js';
 import { massHeight } from './field.js';
+import { worldHour } from './state.js';
 
 const params = new URLSearchParams(location.search);
 const fixedTime = params.has('t') ? Number(params.get('t')) : null;
 const forcedLevel = params.has('lod') ? Number(params.get('lod')) : null;
+// 世界の時刻：ふだんは現実の時刻そのもの
+const worldStart = params.has('at') ? Date.parse(params.get('at')) : Date.now();
+const worldSpeed = params.has('speed') ? Number(params.get('speed')) : 1;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -99,13 +105,21 @@ renderer.setAnimationLoop((ms) => {
   } else {
     autoCamera(t);
   }
+  const worldMs = worldStart + t * 1000 * worldSpeed;
+  world.setHour(worldHour(worldMs));
   world.update(camera);
   renderer.render(scene, camera);
   const h = window.__hakoniwa;
   h.frames++;
   h.busy = world.busy;
   h.levels = world.levelCounts();
+  h.hour = world.hour;
+  h.mean = world.meanState();
   if (hud) {
-    hud.textContent = `boxes ${world.stats.boxes}  meshes ${world.stats.meshes}\nlevels ${h.levels.join(' ')}`;
+    const m = h.mean;
+    hud.textContent =
+      `${new Date(worldMs).toISOString().slice(0, 16)}Z  hour ${world.hour}\n` +
+      `P ${m.P}  S ${m.S}  D ${m.D}\n` +
+      `boxes ${world.stats.boxes}  meshes ${world.stats.meshes}\nlevels ${h.levels.join(' ')}`;
   }
 });

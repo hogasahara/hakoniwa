@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "ビルドは不要。tools/ の確認用スクリプトを Node で動かすための設定だけ"
+}
