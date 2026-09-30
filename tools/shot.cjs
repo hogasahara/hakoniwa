@@ -78,7 +78,7 @@ server.listen(0, '127.0.0.1', async () => {
       { timeout: Number(opt.timeout) },
     );
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
-    await page.screenshot({ path: out });
+    await page.screenshot({ path: out, timeout: Number(opt.timeout) });
     const info = await page.evaluate(() => JSON.stringify({ stats: window.__hakoniwa.stats, levels: window.__hakoniwa.levels }));
     console.log(`${out} (${width}x${height}, ${Date.now() - t0} ms) ${info}`);
   } catch (e) {

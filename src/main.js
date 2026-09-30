@@ -9,11 +9,14 @@
 //   hud=1         区画の数などを画面に出す
 //   at=日時       世界の時刻をこの日時から始める（例 at=2027-03-01T12:00Z）
 //   speed=倍率    世界の時刻の進む速さ（例 speed=3600 で 1 秒に 1 時間）
+//   tone=real|mid|ink  画の仕上げ（写実寄り／中間／線画寄り）
 import * as THREE from 'three';
 import { ChunkView } from './view.js';
 import { massHeight } from './field.js';
 import { worldHour, GENESIS, HOUR } from './state.js';
 import { Atmosphere } from './atmosphere.js';
+import { makeStructureMaterial } from './surface.js';
+import { Post, TONES } from './post.js';
 import { vortexAngle, stormsAlive, stormPosition } from './weather.js';
 
 const params = new URLSearchParams(location.search);
@@ -27,6 +30,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
+const post = new Post(renderer, TONES.includes(params.get('tone')) ? params.get('tone') : 'mid');
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x1f2226, 0.0006);
@@ -48,7 +52,7 @@ const sea = new THREE.Mesh(
 sea.rotation.x = -Math.PI / 2;
 scene.add(sea);
 
-const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92 });
+const material = makeStructureMaterial();
 const world = new ChunkView(scene, material, { forcedLevel });
 
 // カメラ
@@ -94,6 +98,7 @@ function resize() {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  post.setSize();
 }
 addEventListener('resize', resize);
 
@@ -130,7 +135,7 @@ renderer.setAnimationLoop((ms) => {
   world.setHour(worldHour(worldMs));
   world.update(camera);
   atmosphere.update((worldMs - GENESIS) / HOUR, camera, t);
-  renderer.render(scene, camera);
+  post.render(scene, camera);
   const h = window.__hakoniwa;
   h.frames++;
   h.busy = world.busy;
