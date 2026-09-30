@@ -3,6 +3,7 @@
 // （スケールをまたぐ辻褄）。画素より細かい模様は平均の色に溶かして、遠くでちらつかないようにする。
 // 見た目だけなので浮動小数でよい。
 import * as THREE from 'three';
+import { ORGANIC_GLSL, ORGANIC_LO, ORGANIC_HI } from './organic.js';
 
 const NOISE = /* glsl */ `
 float sHash(vec3 p) {
@@ -41,7 +42,7 @@ export function makeStructureMaterial() {
         '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWNor = normalize(mat3(modelMatrix) * objectNormal);',
       );
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;\n' + NOISE)
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;\n' + NOISE + ORGANIC_GLSL)
       .replace(
         '#include <color_fragment>',
         /* glsl */ `
@@ -69,16 +70,14 @@ export function makeStructureMaterial() {
             diffuseColor.rgb *= 1.0 - 0.35 * drip;
           }
 
-          // 有機物：大きな斑（数十 m）で構造を覆う。低いところにやや多い
-          float big = sFbm(vec3(p.x / 60.0, p.y / 45.0, p.z / 60.0));
-          float cover = big + n.y * 0.04 + (1.0 - smoothstep(0.0, 160.0, p.y)) * 0.06;
+          // 有機物：organic.js と同じ分布（形を生やす場所と一致する）。縁は細かい粒でほつれさせる
           float grain = sFbm(p * 0.9);
-          float organic = smoothstep(0.6, 0.68, cover + (grain - 0.5) * 0.16);
+          float organic = smoothstep(${ORGANIC_LO.toFixed(4)}, ${ORGANIC_HI.toFixed(4)}, organicField(p) + (grain - 0.5) * 0.05);
           if (organic > 0.0) {
             // 茂み（くすんだ緑）と肉質の菌糸（くすんだ赤褐色）が場所で入れ替わる
-            float kind = sFbm(vec3(p.x / 90.0 + 7.0, p.y / 70.0, p.z / 90.0));
-            vec3 moss = vec3(0.075, 0.1, 0.045) * (0.6 + 0.8 * grain);
-            vec3 flesh = vec3(0.16, 0.07, 0.055) * (0.6 + 0.8 * sFbm(p * 2.3 + 5.0));
+            float kind = organicKind(p);
+            vec3 moss = vec3(0.07, 0.095, 0.04) * (0.55 + 0.9 * grain);
+            vec3 flesh = vec3(0.16, 0.065, 0.05) * (0.55 + 0.9 * sFbm(p * 2.3 + 5.0));
             vec3 org = mix(moss, flesh, smoothstep(0.42, 0.62, kind));
             diffuseColor.rgb = mix(diffuseColor.rgb, org, organic);
           }

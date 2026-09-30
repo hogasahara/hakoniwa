@@ -30,7 +30,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
-const post = new Post(renderer, TONES.includes(params.get('tone')) ? params.get('tone') : 'mid');
+const post = new Post(renderer, TONES.includes(params.get('tone')) ? params.get('tone') : 'real');
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x1f2226, 0.0006);

@@ -43,4 +43,6 @@ export const SEED = {
   climate: 0x19a7f5c2,
   storm: 0x4c2e8b1d,
   habit: 0x71d3a96e,
+  organic: 0x2b7e5d19,
+  growth: 0x58c1f07a,
 };
