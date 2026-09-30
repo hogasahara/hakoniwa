@@ -44,8 +44,9 @@ export class ChunkView {
     if (this.forcedLevel !== null) return this.forcedLevel;
     let level = LEVELS - 1;
     for (let i = 0; i < LOD_DISTANCE.length; i++) {
-      // 今の段に留まる側へ少し広げて、境目でのちらつきを防ぐ
-      const edge = LOD_DISTANCE[i] * (i < c.level ? 1 + HYSTERESIS : 1 - HYSTERESIS);
+      // 境目でのちらつきを防ぐ：すでに段 i 以下（細かい側）なら少し遠くまで留まり、
+      // 粗い側から細かくなるには少し近づく必要がある
+      const edge = LOD_DISTANCE[i] * (c.level !== -1 && c.level <= i ? 1 + HYSTERESIS : 1 - HYSTERESIS);
       if (d < edge) {
         level = i;
         break;
