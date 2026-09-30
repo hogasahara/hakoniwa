@@ -1,8 +1,9 @@
-// 骨組みの最小版：暗い海と霧、座標から生成した塊。寄ると柱が部品の集積に分かれる。
+// 暗い海と霧、座標から生成した塊（寄ると柱が部品の集積に分かれる）、空と天候。
 //
 // URL の引数（確認用）：
 //   t=秒          画面の時刻を固定する
 //   view=far|mid|near  決まった位置から見る
+//   view=vortex|storm   渦の方角／いちばん近い嵐を、箱庭越しに見る
 //   cam=x,y,z,tx,ty,tz  カメラの位置と注視点
 //   lod=0..4      全区画の段を固定する（段どうしの辻褄を比べる）
 //   hud=1         区画の数などを画面に出す
@@ -11,7 +12,9 @@
 import * as THREE from 'three';
 import { ChunkView } from './view.js';
 import { massHeight } from './field.js';
-import { worldHour } from './state.js';
+import { worldHour, GENESIS, HOUR } from './state.js';
+import { Atmosphere } from './atmosphere.js';
+import { vortexAngle, stormsAlive, stormPosition } from './weather.js';
 
 const params = new URLSearchParams(location.search);
 const fixedTime = params.has('t') ? Number(params.get('t')) : null;
@@ -26,20 +29,20 @@ renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const skyColor = new THREE.Color(0x1f2226);
-scene.background = skyColor;
-scene.fog = new THREE.FogExp2(skyColor, 0.0006);
+scene.fog = new THREE.FogExp2(0x1f2226, 0.0006);
 
-const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 6000);
+// 嵐は 5 km 先から見えるので、遠くまで描く
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 14000);
 
-scene.add(new THREE.HemisphereLight(0x9aa0a8, 0x0b0d10, 1.3));
+const hemi = new THREE.HemisphereLight(0x9aa0a8, 0x0b0d10, 1.3);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xd2cab8, 1.8);
-sun.position.set(-300, 400, 200);
 scene.add(sun);
+const atmosphere = new Atmosphere(scene, { sun, hemi, fog: scene.fog });
 
 // 海
 const sea = new THREE.Mesh(
-  new THREE.PlaneGeometry(12000, 12000),
+  new THREE.PlaneGeometry(30000, 30000),
   new THREE.MeshStandardMaterial({ color: 0x0b0e11, roughness: 0.3, metalness: 0.3 }),
 );
 sea.rotation.x = -Math.PI / 2;
@@ -99,7 +102,25 @@ window.__hakoniwa = { frames: 0, busy: true, stats: world.stats };
 
 renderer.setAnimationLoop((ms) => {
   const t = fixedTime ?? ms / 1000;
-  if (fixedCam) {
+  const hourNow = (worldStart + t * 1000 * worldSpeed - GENESIS) / HOUR;
+  if (params.get('view') === 'vortex') {
+    // 渦の反対側から、箱庭越しに渦を見る
+    const a = vortexAngle(hourNow);
+    camera.position.set(-Math.cos(a) * 1500, 260, -Math.sin(a) * 1500);
+    camera.lookAt(Math.cos(a) * 2000, 520, Math.sin(a) * 2000);
+  } else if (params.get('view') === 'storm') {
+    // いちばん近い嵐を、箱庭越しに見る
+    const m = hourNow * 60;
+    let best = null, bd = Infinity;
+    for (const st of stormsAlive(m)) {
+      const p = stormPosition(st, m);
+      const d = Math.hypot(p.x, p.z);
+      if (d < bd) { bd = d; best = p; }
+    }
+    const a = best ? Math.atan2(best.z, best.x) : 0;
+    camera.position.set(-Math.cos(a) * 1100, 300, -Math.sin(a) * 1100);
+    camera.lookAt(best ? best.x : 0, 150, best ? best.z : 0);
+  } else if (fixedCam) {
     camera.position.set(fixedCam[0], fixedCam[1], fixedCam[2]);
     camera.lookAt(fixedCam[3], fixedCam[4], fixedCam[5]);
   } else {
@@ -108,6 +129,7 @@ renderer.setAnimationLoop((ms) => {
   const worldMs = worldStart + t * 1000 * worldSpeed;
   world.setHour(worldHour(worldMs));
   world.update(camera);
+  atmosphere.update((worldMs - GENESIS) / HOUR, camera, t);
   renderer.render(scene, camera);
   const h = window.__hakoniwa;
   h.frames++;
@@ -115,11 +137,14 @@ renderer.setAnimationLoop((ms) => {
   h.levels = world.levelCounts();
   h.hour = world.hour;
   h.mean = world.meanState();
+  h.air = atmosphere.info;
   if (hud) {
     const m = h.mean;
     hud.textContent =
       `${new Date(worldMs).toISOString().slice(0, 16)}Z  hour ${world.hour}\n` +
       `P ${m.P}  S ${m.S}  D ${m.D}\n` +
+      `day ${(h.air.phase * 21).toFixed(1)}/21h  light ${h.air.daylight.toFixed(2)}  storms ${h.air.storms}  ` +
+      `gloom ${h.air.gloom.toFixed(2)}  rain ${h.air.atCamera.toFixed(2)}\n` +
       `boxes ${world.stats.boxes}  meshes ${world.stats.meshes}\nlevels ${h.levels.join(' ')}`;
   }
 });

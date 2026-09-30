@@ -3,13 +3,15 @@
 // 量（どれも 0〜1000 の整数）
 //   P 棲むもの  …… 過去 30 日の「暮らしやすさ」の重み付き平均（数日〜数週間で増減）
 //   S 建て広げた量 …… 過去 60 日の P の平均（棲むものに遅れて増減）
-//   D 損傷      …… 過去 48 時間の嵐の打撃が、建て直しで減っていく残り（数時間で戻る）
+//   D 損傷      …… 過去 24 時間に通った嵐の打撃が、建て直しで減っていく残り（数時間で戻る）
+//                  嵐は weather.js（渦からちぎれて流れてくる）
 //
 // どの量も「直近の決まった長さの出来事」だけで決まる。そのため
 //   ・どの時刻でも、窓の長さ分だけ計算すれば求まる（世界の年齢に関係なく速い）
 //   ・入力が有限の範囲なので量も必ず範囲に収まる（何年経っても全部崩れる・覆い尽くすに行き着かない）
 // 計算はすべて整数。分岐も整数の比較だけ（どの端末でも同じ歴史になる）。
 import { hash, SEED } from './hash.js';
+import { stormsBornIn, stormPass, STORM_LIFE_MIN } from './weather.js';
 
 export const HOUR = 3600 * 1000;
 // 創世の時刻（仮：最初に公開した日）。世界の時刻はここからの経過時間で数える
@@ -21,8 +23,7 @@ export function worldHour(ms) {
 
 const P_DAYS = 30;
 const S_DAYS = 60;
-const D_HOURS = 48;
-const STORM_SLOT = 6; // 仮の嵐は 6 時間ごとの枠に 1 つまで
+const D_HOURS = 24;
 
 // 整数の値ノイズ（時間軸）。0〜1000
 function timeNoise(seed, t, period) {
@@ -38,28 +39,14 @@ function climate(day) {
   return Math.floor((timeNoise(SEED.climate, day, 23) * 2 + timeNoise(SEED.climate + 1, day, 7)) / 3);
 }
 
-// ---- 仮の嵐（次の一歩で天候として作り直す） ----
-// 枠 slot の嵐。無ければ null。中心と半径はメートル、強さは 0〜1000
-function stormAt(slot) {
-  const h = hash(SEED.storm, slot);
-  if (h % 100 >= 35) return null;
-  return {
-    hour: slot * STORM_SLOT,
-    x: (hash(SEED.storm + 1, slot) % 1201) - 600,
-    z: (hash(SEED.storm + 2, slot) % 1201) - 600,
-    r: 150 + (hash(SEED.storm + 3, slot) % 301),
-    strength: 300 + (hash(SEED.storm + 4, slot) % 701),
-  };
-}
-
-// 嵐が区画の中心に与える打撃。0〜1000
-function impact(storm, x, z) {
-  const dx = x - storm.x;
-  const dz = z - storm.z;
-  const d2 = dx * dx + dz * dz;
-  const r2 = storm.r * storm.r;
-  if (d2 >= r2) return 0;
-  return Math.floor((storm.strength * (r2 - d2)) / r2);
+// 地点を嵐が通った記録：分の範囲 [from, to) にいちばん近づいた嵐の打撃と時刻
+function passesIn(x, z, from, to) {
+  const out = [];
+  for (const st of stormsBornIn(from - STORM_LIFE_MIN, to)) {
+    const p = stormPass(st, x, z);
+    if (p && p.minute >= from && p.minute < to) out.push(p);
+  }
+  return out;
 }
 
 // ---- 区画の量 ----
@@ -79,11 +66,7 @@ export function chunkSite(cx, cz, size) {
 function favor(site, day) {
   let v = Math.floor((climate(day) * site.habit) / 600);
   if (v > 1000) v = 1000;
-  const first = Math.floor((day * 24) / STORM_SLOT);
-  for (let s = first; s < first + 24 / STORM_SLOT; s++) {
-    const storm = stormAt(s);
-    if (storm) v -= Math.floor(impact(storm, site.x, site.z) / 3);
-  }
+  for (const p of passesIn(site.x, site.z, day * 1440, (day + 1) * 1440)) v -= Math.floor(p.hit / 3);
   return v < 0 ? 0 : v;
 }
 
@@ -113,18 +96,15 @@ export function chunkState(site, hour, cache = new Map()) {
   const S = Math.floor(sum / S_DAYS);
 
   // 損傷：嵐ごとの打撃が、建て直しの時間をかけて 0 に戻る。
-  // 建て直しの時間は、嵐の日に棲むものが多いほど短い（6〜42 時間）
+  // 建て直しの時間は、嵐の日に棲むものが多いほど短い（4〜24 時間）
+  // 打撃は嵐がいちばん近づいた時刻（の属する時間）から数える
   let D = 0;
-  const last = Math.floor(hour / STORM_SLOT);
-  for (let s = Math.floor((hour - D_HOURS) / STORM_SLOT) + 1; s <= last; s++) {
-    const storm = stormAt(s);
-    if (!storm) continue;
-    const hit = impact(storm, site.x, site.z);
-    if (hit === 0) continue;
-    const pAt = population(site, Math.floor(storm.hour / 24), cache);
-    const repair = 6 + Math.floor(((1000 - pAt) * 36) / 1000);
-    const age = hour - storm.hour;
-    if (age < repair) D += Math.floor((hit * (repair - age)) / repair);
+  for (const p of passesIn(site.x, site.z, (hour - D_HOURS + 1) * 60, (hour + 1) * 60)) {
+    const at = Math.floor(p.minute / 60);
+    const pAt = population(site, Math.floor(at / 24), cache);
+    const repair = 4 + Math.floor(((1000 - pAt) * 20) / 1000);
+    const age = hour - at;
+    if (age < repair) D += Math.floor((p.hit * (repair - age)) / repair);
   }
   if (D > 1000) D = 1000;
   return { P, S, D };
