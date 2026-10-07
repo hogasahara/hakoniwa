@@ -148,6 +148,8 @@ const Q = new URLSearchParams(location.search);
 const FIXED_T = Q.has('t') ? parseFloat(Q.get('t')) : null;
 const START_VIEW = Math.min(6, Math.max(0, (parseInt(Q.get('view') || '1', 10) || 1) - 1));
 if (Q.get('ui') === '0') document.body.classList.add('hide-ui');
+// q=low で、霧の中の光と隅の暗さ（重い処理）を切る
+const QUALITY = Q.get('q') === 'low' ? 0 : 1;
 
 // ---------- 乱数と雑音（毎回同じ箱庭になるよう種を固定） ----------
 function mulberry(a) {
@@ -291,6 +293,25 @@ function patch(mat, opt = {}) {
       fs = fs.replace('#include <color_fragment>', `#include <color_fragment>
         diffuseColor.rgb *= mix( 1.0, triTex( vWPos, normalize( vWNrm ) ) * 1.25, uTriAmt );`);
     }
+    if (opt.ice) {
+      // 除雪された道の轍と、踏み固めた玄関の道は凍って艶が出る。街灯とバスの灯りが縦に伸びて映る
+      sh.uniforms.uSkyRefl = { value: new THREE.Color(0x3a4a66) };
+      fs = fs.replace('#include <common>', '#include <common>\nuniform vec3 uSkyRefl; float gIce = 0.0;')
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+          {
+            float road = smoothstep(12.0, 12.7, vWPos.z) * (1.0 - smoothstep(16.3, 17.0, vWPos.z));
+            float rut = exp(-pow(vWPos.z - 13.5, 2.0) / 0.15) + exp(-pow(vWPos.z - 15.4, 2.0) / 0.15);
+            float path = (1.0 - smoothstep(0.7, 1.3, abs(vWPos.x))) * smoothstep(4.4, 5.0, vWPos.z) * (1.0 - smoothstep(11.4, 12.2, vWPos.z));
+            float nz = fract(sin(dot(floor(vWPos.xz * vec2(0.8, 3.0)), vec2(12.9898, 78.233))) * 43758.5453);
+            gIce = clamp(road * (0.3 + 0.7 * min(rut, 1.0)) + path * 0.45, 0.0, 1.0) * (0.55 + 0.45 * nz);
+            roughnessFactor = mix(roughnessFactor, 0.1, gIce);
+            diffuseColor.rgb *= mix(1.0, 0.55, gIce);
+          }`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          normal = normalize(normal + (viewMatrix * vec4(sin(vWPos.x * 9.0 + vWPos.z * 2.0) * 0.05, 0.0, sin(vWPos.x * 2.3 + 1.0) * 0.08, 0.0)).xyz * gIce);`)
+        .replace('#include <opaque_fragment>', `outgoingLight += uSkyRefl * pow(1.0 - saturate(dot(normal, geometryViewDir)), 4.0) * gIce * 0.35;
+          #include <opaque_fragment>`);
+    }
     if (opt.sparkle) {
       fs = fs.replace('#include <opaque_fragment>', `
         {
@@ -306,7 +327,7 @@ function patch(mat, opt = {}) {
     }
     sh.fragmentShader = fs;
   };
-  mat.customProgramCacheKey = () => 'z' + (opt.tri ? 't' : '') + (opt.sparkle ? 's' : '') + (opt.key || '');
+  mat.customProgramCacheKey = () => 'z' + (opt.tri ? 't' : '') + (opt.sparkle ? 's' : '') + (opt.ice ? 'i' : '') + (opt.key || '');
   return mat;
 }
 
@@ -683,7 +704,8 @@ function groundTint(x, z) {
   }
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   g.computeVertexNormals();
-  const ground = new THREE.Mesh(g, M.snow);
+  M.ground = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.93 }), { tri: texMottle, triScale: 0.35, triAmt: 0.18, sparkle: true, ice: true, key: 'ground' });
+  const ground = new THREE.Mesh(g, M.ground);
   ground.receiveShadow = true;
   scene.add(ground);
 
@@ -718,10 +740,10 @@ function groundTint(x, z) {
 // 点光源はすべて lightRoot の下に置く（並び順が描画側の配列の順になる。部屋分けの番号をそれに合わせる）
 const lightRoot = new THREE.Group(); scene.add(lightRoot);
 const LIGHTS = [];
-function addLight(color, intensity, dist, x, y, z, zone, flicker = 0) {
+function addLight(color, intensity, dist, x, y, z, zone, flicker = 0, scat = {}) {
   const l = new THREE.PointLight(color, intensity, dist, 2);
   l.position.set(x, y, z);
-  l.userData = { zone, base: intensity, flicker, seed: R(0, 100) };
+  l.userData = { zone, base: intensity, flicker, seed: R(0, 100), down: scat.down ?? true, scat: scat.k ?? 1 };
   lightRoot.add(l); LIGHTS.push(l);
   return l;
 }
@@ -1637,7 +1659,7 @@ function streetLamp(x, z, ry, h = 5.2) {
   const lp = new THREE.Vector3(x + Math.sin(ry) * 0.95, y0 + h - 0.36, z + Math.cos(ry) * 0.95);
   addLight(0xffb36a, 26, 16, lp.x, lp.y - 0.1, lp.z, 0);
   halo(lp.x, lp.y, lp.z, 1.6, [1.0, 0.62, 0.3]);
-  BEAMS.push({ p: lp.clone(), h: lp.y - groundH(lp.x, lp.z), r: 2.2, color: [1.0, 0.66, 0.34], k: 0.2 });
+  BEAMS.push({ p: lp.clone(), h: lp.y - groundH(lp.x, lp.z), r: 2.2, color: [1.0, 0.66, 0.34], k: QUALITY ? 0.1 : 0.2 });
   SNOW_LIGHTS.push({ p: lp, c: [1.0, 0.66, 0.35], r: 4.5 });
   return lp;
 }
@@ -1765,7 +1787,7 @@ useRng(631);
   panel.position.set(vx, vy + 1.2, vz + 0.38); scene.add(panel);
   B.box('metal', 0x2a2a2a, 0.8, 0.22, 0.04, vx, vy + 0.25, vz + 0.38);
   B.snow(1.1, 0.85, 0.35, vx, vy + 1.85, vz);
-  addLight(0xdde8ff, 7, 6, vx, vy + 1.2, vz + 0.9, 0);
+  addLight(0xdde8ff, 7, 6, vx, vy + 1.2, vz + 0.9, 0, 0, { down: false, k: 0.8 });
   halo(vx, vy + 1.2, vz + 0.5, 1.4, [0.8, 0.88, 1.0]);
   SNOW_LIGHTS.push({ p: new THREE.Vector3(vx, vy + 1.2, vz + 0.8), c: [0.8, 0.88, 1.0], r: 2.2 });
 }
@@ -1979,10 +2001,10 @@ for (const x of [-3.6, 3.6]) {
   addLight(0xffc08a, 5, 8, x, 5.95, -4.6, 1);
   halo(x, 6.0, -4.6, 0.7, [0.55, 0.32, 0.14]);
 }
-const stoveLight = addLight(0xff7a30, 5, 8, STOVE.x, F + 0.62, STOVE.z + 0.6, 1, 1);
+const stoveLight = addLight(0xff7a30, 5, 8, STOVE.x, F + 0.62, STOVE.z + 0.6, 1, 1, { down: false, k: 0.7 });
 const stoveHalo = halo(STOVE.x, F + 0.58, STOVE.z + 0.5, 0.55, [1.0, 0.45, 0.12]);
-for (const tx of TABLES) addLight(0xffd9a0, 2.2, 4, tx, F + 1.0, -0.3, 1);
-addLight(0xffd9a0, 1.6, 3.5, 5.6, F + 1.25, COUNTER.z + 0.2, 1);
+for (const tx of TABLES) addLight(0xffd9a0, 2.2, 4, tx, F + 1.0, -0.3, 1, 0, { k: 0.5 });
+addLight(0xffd9a0, 1.6, 3.5, 5.6, F + 1.25, COUNTER.z + 0.2, 1, 0, { k: 0.5 });
 for (const p of DESK_LAMPS) halo(p.x, p.y - 0.05, p.z, 0.3, [0.45, 0.3, 0.12]);
 // 玄関の軒灯
 addLight(0xffb36a, 7, 9, 0, F + 2.55, MAIN.z1 + 1.35, 0);
@@ -2340,12 +2362,12 @@ function makeHaloMesh(list) {
   g.setIndex(idx);
   const mat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    uniforms: { uCamZone: CAM_ZONE, uFogD: { value: 0.02 }, uGain: { value: 1 } },
+    uniforms: { uCamZone: CAM_ZONE, uFogD: { value: 0.02 }, uGain: { value: QUALITY ? 0.6 : 1 }, uSizeK: { value: QUALITY ? 0.6 : 1 } },
     vertexShader: `attribute vec2 corner; attribute vec3 hcolor; attribute vec2 extra;
-      uniform float uCamZone, uFogD; varying vec2 vC; varying vec3 vCol;
+      uniform float uCamZone, uFogD, uSizeK; varying vec2 vC; varying vec3 vCol;
       void main(){
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        float s = extra.x;
+        float s = extra.x * uSizeK;
         float vis = (extra.y < -0.5 || abs(extra.y - uCamZone) < 0.5) ? 1.0 : 0.0;
         mv.xyz += normalize(-mv.xyz) * min(s * 0.6, max(-mv.z - 0.3, 0.0));
         mv.xy += corner * s;
@@ -2461,7 +2483,7 @@ const snowU = {
   uLP: { value: Array.from({ length: NSL }, () => new THREE.Vector3(0, -99, 0)) },
   uLC: { value: Array.from({ length: NSL }, () => new THREE.Vector3()) },
   uLR: { value: new Float32Array(NSL).fill(1) },
-  uFogD: { value: 0.02 }, uAmb: { value: 1 }, uGain: { value: 1 },
+  uFogD: { value: 0.02 }, uAmb: { value: 1 }, uGain: { value: 1 }, tFocus: { value: null }, uAuto: { value: 0 },
 };
 SNOW_LIGHTS.slice(0, NSL).forEach((l, i) => { snowU.uLP.value[i].copy(l.p); snowU.uLC.value[i].set(...l.c); snowU.uLR.value[i] = l.r; });
 function makeSnow(n, boxMin, boxSize, follow) {
@@ -2476,7 +2498,7 @@ function makeSnow(n, boxMin, boxSize, follow) {
     vertexShader: ZONE_VS + `
       attribute vec4 seed;
       uniform float uTime, uPx, uFocus, uAperture, uFollow, uFogD, uAmb;
-      uniform vec3 uBoxMin, uBoxSize, uCam;
+      uniform vec3 uBoxMin, uBoxSize, uCam; uniform sampler2D tFocus; uniform float uAuto;
       uniform vec3 uLP[${NSL}]; uniform vec3 uLC[${NSL}]; uniform float uLR[${NSL}];
       varying float vA; varying vec3 vCol; varying float vSoft;
       void main(){
@@ -2500,7 +2522,8 @@ function makeSnow(n, boxMin, boxSize, follow) {
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         float z = max(-mv.z, 0.05);
         float px = (0.022 + seed.w * 0.02) * uPx / z;
-        float coc = uAperture * abs(z - uFocus) / z;
+        float fd = uAuto > 0.5 ? texture2D(tFocus, vec2(0.5)).r : uFocus;
+        float coc = uAperture * abs(z - fd) / z;
         float size = clamp(px + coc, 1.0, 72.0);
         gl_PointSize = size;
         vSoft = clamp(coc / size, 0.0, 1.0);
@@ -2592,17 +2615,157 @@ LIGHTS.forEach((l, i) => { ZU.uLZ.value[i] = l.userData.zone; });
 // 画の仕上げ：被写界深度（丸いボケ）→ 光のにじみ → 色調
 // ============================================================
 const FS_VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
-const COC_GLSL = `uniform float uNear, uFar, uFocus, uAperture, uMaxCoc;
+// 深さから視点空間の位置を戻す
+const VIEWPOS_GLSL = `uniform mat4 uInvProj;
+  vec3 viewPos(vec2 uv, float d){ vec4 v = uInvProj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0); return v.xyz / v.w; }`;
+// ピントの距離は、自動なら GPU の中で測った値（1×1 の的）を読む
+const COC_GLSL = `uniform float uNear, uFar, uFocus, uAperture, uMaxCoc, uAuto; uniform sampler2D tFocus;
   float linZ(float d){ return uNear * uFar / (uFar - d * (uFar - uNear)); }
-  float cocOf(float d){ float z = linZ(d); return clamp(uAperture * (z - uFocus) / z, -uMaxCoc, uMaxCoc); }`;
+  float focusD(){ return uAuto > 0.5 ? texture2D(tFocus, vec2(0.5)).r : uFocus; }
+  float cocOf(float d){ float z = linZ(d); return clamp(uAperture * (z - focusD()) / z, -uMaxCoc, uMaxCoc); }`;
+const NS = 24; // 霧を光らせる灯りの数の上限
 class Post {
   constructor() {
     this.scene = new THREE.Scene();
     this.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); this.quad.frustumCulled = false;
     this.scene.add(this.quad);
-    this.cocU = { uNear: { value: camera.near }, uFar: { value: camera.far }, uFocus: { value: 20 }, uAperture: { value: 4 }, uMaxCoc: { value: 11 } };
+    this.cocU = { uNear: { value: camera.near }, uFar: { value: camera.far }, uFocus: { value: 20 }, uAperture: { value: 4 }, uMaxCoc: { value: 11 }, uAuto: { value: 1 }, tFocus: { value: null } };
+    this.camU = { uInvProj: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() }, uViewProj: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() } };
+    this.scatU = {
+      uSP: { value: Array.from({ length: NS }, () => new THREE.Vector4(0, -1e4, 0, 1)) },
+      uSC: { value: Array.from({ length: NS }, () => new THREE.Vector4()) },
+      uSN: { value: 0 }, uScatter: { value: 1 }, uFogD: { value: 0.02 },
+    };
     const mk = (fs, u) => new THREE.ShaderMaterial({ vertexShader: FS_VS, fragmentShader: fs, uniforms: u, depthTest: false, depthWrite: false });
+
+    // ピント：画面の中心あたり 3×3 点でいちばん近い物までの距離を、前のコマの値からなめらかに追う
+    this.mFocus = mk(VIEWPOS_GLSL + `
+      uniform sampler2D tDepth, tPrev; uniform float uK, uMin, uMax; varying vec2 vUv;
+      void main(){
+        float m = 1e5;
+        for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+          vec2 uv = vec2(0.5) + vec2(float(i), float(j)) * vec2(0.03, 0.04);
+          float d = texture2D(tDepth, uv).x;
+          m = min(m, d >= 1.0 ? uMax : -viewPos(uv, d).z);
+        }
+        m = clamp(m, uMin, uMax);
+        float prev = texture2D(tPrev, vec2(0.5)).r;
+        gl_FragColor = vec4(mix(prev, m, uK), 0.0, 0.0, 1.0);
+      }`, { ...this.camU, tDepth: { value: null }, tPrev: { value: null }, uK: { value: 1 }, uMin: { value: 0.6 }, uMax: { value: 90 } });
+
+    // 灯りが画面の上で手前の物に隠れているか（灯りごとに 1 回だけ計算して、横 NS×縦 1 の的に置く）
+    this.mVis = mk(VIEWPOS_GLSL + `
+      uniform sampler2D tDepth; uniform mat4 uViewProj; uniform vec4 uSP[${NS}]; uniform vec2 uTexel; varying vec2 vUv;
+      void main(){
+        int i = int(floor(vUv.x * float(${NS})));
+        vec4 c = uViewProj * vec4(uSP[i].xyz, 1.0);
+        float v;
+        if (c.w <= 0.0) v = 0.35;
+        else {
+          vec2 uv = c.xy / c.w * 0.5 + 0.5;
+          if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) v = 0.7;
+          else {
+            float s = 0.0;
+            for (int k = 0; k < 5; k++) {
+              vec2 o = k == 0 ? vec2(0.0) : vec2(k == 1 ? 1.0 : k == 2 ? -1.0 : 0.0, k == 3 ? 1.0 : k == 4 ? -1.0 : 0.0) * uTexel * 5.0;
+              float d = texture2D(tDepth, uv + o).x;
+              float zs = d >= 1.0 ? 1e5 : -viewPos(uv + o, d).z;
+              s += step(c.w - 0.35, zs);
+            }
+            v = mix(0.06, 1.0, s / 5.0);
+          }
+        }
+        gl_FragColor = vec4(v, 0.0, 0.0, 1.0);
+      }`, { ...this.camU, ...this.scatU, tDepth: { value: null }, uTexel: { value: new THREE.Vector2() } });
+
+    // 霧の中の光：灯りごとに、視線に沿った明るさ（逆 2 乗）を表面までの長さで積分した閉じた式で足す
+    this.mInsc = mk(VIEWPOS_GLSL + `
+      uniform sampler2D tDepth, tVis; uniform mat4 uCamWorld; uniform vec3 uCamPos;
+      uniform vec4 uSP[${NS}]; uniform vec4 uSC[${NS}]; uniform int uSN; uniform float uScatter, uFogD;
+      varying vec2 vUv;
+      void main(){
+        float d = texture2D(tDepth, vUv).x;
+        vec3 wp = (uCamWorld * vec4(viewPos(vUv, min(d, 0.99999)), 1.0)).xyz;
+        vec3 ro = uCamPos, rd = normalize(wp - ro);
+        float T = d >= 1.0 ? 300.0 : length(wp - ro);
+        vec3 acc = vec3(0.0);
+        for (int i = 0; i < ${NS}; i++) {
+          if (i >= uSN) break;
+          vec4 sp = uSP[i]; vec4 sc = uSC[i];
+          vec3 q = sp.xyz - ro; float tc = dot(q, rd);
+          float h2 = max(dot(q, q) - tc * tc, 0.0004), h = sqrt(h2);
+          float I = (atan((T - tc) / h) - atan(-tc / h)) / h;
+          I *= exp(-h2 / (sp.w * sp.w));                       // 光から遠い筋は弱く
+          I *= exp(-pow(uFogD * max(tc, 0.0), 2.0) * 0.6);      // 光までの霧で弱まる
+          I *= texture2D(tVis, vec2((float(i) + 0.5) / float(${NS}), 0.5)).r;
+          if (sc.w > 0.5) {                                      // 笠の付いた灯りは下へ
+            vec3 cp = ro + rd * clamp(tc, 0.0, T);
+            I *= mix(0.12, 1.0, smoothstep(-0.25, 0.7, -normalize(cp - sp.xyz).y));
+          }
+          acc += sc.rgb * I;
+        }
+        acc *= uScatter;
+        acc = acc / (1.0 + dot(acc, vec3(0.3)) * 0.8);           // 重なっても白く飛ばない
+        gl_FragColor = vec4(acc, 1.0);
+      }`, { ...this.camU, ...this.scatU, tDepth: { value: null }, tVis: { value: null } });
+
+    // 隅の暗さ（SSAO）：法線は深さから作り直す
+    this.mAO = mk(VIEWPOS_GLSL + `
+      uniform sampler2D tDepth; uniform mat4 uProj; uniform vec2 uTexel; uniform float uRadius; varying vec2 vUv;
+      vec3 VP(vec2 uv){ return viewPos(uv, texture2D(tDepth, uv).x); }
+      float h12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+      void main(){
+        float d = texture2D(tDepth, vUv).x;
+        if (d >= 1.0) { gl_FragColor = vec4(1.0); return; }
+        vec3 p = viewPos(vUv, d);
+        vec2 tx = uTexel * 2.0;
+        vec3 px1 = VP(vUv + vec2(tx.x, 0.0)), px0 = VP(vUv - vec2(tx.x, 0.0)), py1 = VP(vUv + vec2(0.0, tx.y)), py0 = VP(vUv - vec2(0.0, tx.y));
+        vec3 dx = abs(px1.z - p.z) < abs(p.z - px0.z) ? px1 - p : p - px0;
+        vec3 dy = abs(py1.z - p.z) < abs(p.z - py0.z) ? py1 - p : p - py0;
+        vec3 n = normalize(cross(dx, dy)); if (n.z < 0.0) n = -n;
+        float r = uRadius * mix(1.0, 3.0, smoothstep(12.0, 70.0, -p.z));
+        vec3 t = normalize(cross(n, abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), b = cross(n, t);
+        float rot = h12(vUv / uTexel) * 6.2831, occ = 0.0;
+        for (int i = 0; i < 12; i++) {
+          float fi = float(i), a = fi * 2.39996 + rot, rr = sqrt((fi + 0.5) / 12.0);
+          vec3 dir = normalize(t * cos(a) * rr + b * sin(a) * rr + n * (0.25 + fract(fi * 0.618 + 0.3)));
+          vec3 sp = p + dir * r * (0.3 + 0.7 * fract(fi * 0.37 + 0.1));
+          vec4 c = uProj * vec4(sp, 1.0); vec2 suv = c.xy / c.w * 0.5 + 0.5;
+          float sz = VP(suv).z, diff = sz - sp.z;
+          occ += step(0.03, diff) * smoothstep(r * 2.0, 0.0, diff);  // 手前にあって近いものだけ
+        }
+        gl_FragColor = vec4(vec3(1.0 - occ / 12.0), 1.0);
+      }`, { ...this.camU, tDepth: { value: null }, uTexel: { value: new THREE.Vector2() }, uRadius: { value: 0.5 } });
+    this.mAOBlur = mk(`
+      uniform sampler2D tSrc, tDepth; uniform vec2 uTexel; uniform float uNear, uFar; varying vec2 vUv;
+      float lz(float d){ return uNear * uFar / (uFar - d * (uFar - uNear)); }
+      void main(){
+        float z0 = lz(texture2D(tDepth, vUv).x), acc = 0.0, w = 0.0;
+        for (int y = -2; y <= 2; y++) for (int x = -2; x <= 2; x++) {
+          vec2 uv = vUv + vec2(float(x), float(y)) * uTexel;
+          float k = exp(-abs(lz(texture2D(tDepth, uv).x) - z0) / (z0 * 0.03 + 0.05));
+          acc += texture2D(tSrc, uv).r * k; w += k;
+        }
+        gl_FragColor = vec4(vec3(acc / max(w, 1e-4)), 1.0);
+      }`, { tSrc: { value: null }, tDepth: { value: null }, uTexel: { value: new THREE.Vector2() }, uNear: this.cocU.uNear, uFar: this.cocU.uFar });
+    // 場面に隅の暗さを掛け、霧の中の光を足す（発光と霧の遠景には暗さを掛けない）
+    this.mLit = mk(VIEWPOS_GLSL + `
+      uniform sampler2D tColor, tDepth, tAO, tInsc; uniform float uAOAmt, uFogD; varying vec2 vUv;
+      void main(){
+        vec3 c = texture2D(tColor, vUv).rgb;
+        float d = texture2D(tDepth, vUv).x;
+        if (d < 1.0) {
+          float z = -viewPos(vUv, d).z;
+          float lum = dot(c, vec3(0.3, 0.5, 0.2));
+          float k = uAOAmt * exp(-pow(uFogD * z, 2.0)) * (1.0 - smoothstep(0.8, 2.5, lum));
+          float ao = texture2D(tAO, vUv).r;
+          c *= mix(1.0, ao * ao, k);
+        }
+        c += texture2D(tInsc, vUv).rgb;
+        gl_FragColor = vec4(c, 1.0);
+      }`, { ...this.camU, tColor: { value: null }, tDepth: { value: null }, tAO: { value: null }, tInsc: { value: null }, uAOAmt: { value: QUALITY ? 1 : 0 }, uFogD: this.scatU.uFogD });
+
     this.mPre = mk(COC_GLSL + `
       uniform sampler2D tColor, tDepth; uniform vec2 texel; varying vec2 vUv;
       void main(){
@@ -2665,7 +2828,9 @@ class Post {
                + (texture2D(tSrc, vUv + vec2(-t.x, t.y)).rgb + texture2D(tSrc, vUv + vec2(t.x, t.y)).rgb
                + texture2D(tSrc, vUv + vec2(t.x, -t.y)).rgb + texture2D(tSrc, vUv + vec2(-t.x, -t.y)).rgb) * 2.0;
         gl_FragColor = vec4(s / 12.0 + texture2D(tAdd, vUv).rgb, 1.0); }`, { tSrc: { value: null }, tAdd: { value: null }, texel: { value: new THREE.Vector2() } });
-    this.mFinal = mk(`uniform sampler2D tColor, tBloom; uniform float uBloom, uExposure, uTime, uVig; uniform vec2 uRes; varying vec2 vUv;
+    this.mFinal = mk(`#include <common>
+      #include <tonemapping_pars_fragment>
+      uniform sampler2D tColor, tBloom; uniform float uBloom, uExposure, uTime, uVig, uAgX, uSat; uniform vec2 uRes; varying vec2 vUv;
       vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
       void main(){
         vec2 dc = vUv - 0.5;
@@ -2675,13 +2840,17 @@ class Post {
         col *= uExposure;
         float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
         col = mix(col * vec3(0.9, 0.98, 1.14), col * vec3(1.05, 1.0, 0.92), smoothstep(0.02, 0.6, l));
-        col = aces(col);
+        if (uAgX > 0.5) {
+          col = AgXToneMapping(col);
+          float lm = dot(col, vec3(0.2126, 0.7152, 0.0722));
+          col = max(vec3(0.0), lm + (col - lm) * uSat);   // AgX は色が淡くなるので少し戻す
+        } else col = aces(col);
         col *= 1.0 - uVig * dot(dc, dc) * 1.7;
         col = pow(col, vec3(1.0 / 2.2));
         float n = fract(sin(dot(vUv * uRes + fract(uTime) * 91.7, vec2(12.9898, 78.233))) * 43758.5453);
         col += (n - 0.5) * 0.03 * (1.0 - 0.6 * dot(col, vec3(0.2126, 0.7152, 0.0722)));
         gl_FragColor = vec4(col, 1.0);
-      }`, { tColor: { value: null }, tBloom: { value: null }, uBloom: { value: 0.9 }, uExposure: { value: 1 }, uTime: ZU.uTime, uVig: { value: 0.55 }, uRes: { value: new THREE.Vector2() } });
+      }`, { tColor: { value: null }, tBloom: { value: null }, uBloom: { value: 0.9 }, uExposure: { value: 1 }, uTime: ZU.uTime, uVig: { value: 0.55 }, uRes: { value: new THREE.Vector2() }, uAgX: { value: Q.get('tone') === 'aces' ? 0 : 1 }, uSat: { value: 1.12 }, toneMappingExposure: { value: 1 } });
     this.rts = [];
   }
   resize(w, h) {
@@ -2689,7 +2858,12 @@ class Post {
     this.rts = [];
     const rt = (W, H, o = {}) => { const r = new THREE.WebGLRenderTarget(Math.max(1, W | 0), Math.max(1, H | 0), { type: THREE.HalfFloatType, depthBuffer: false, ...o }); this.rts.push(r); return r; };
     const msaa = Q.get('msaa') === '0' ? 0 : 4;
-    this.rScene = rt(w, h, { depthBuffer: true, samples: msaa, depthTexture: new THREE.DepthTexture(w, h) });
+    this.rScene = rt(w, h, { depthBuffer: true, samples: msaa, depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType) });
+    this.rLit = rt(w, h);
+    this.rInsc = rt(w / 2, h / 2); this.rAO = rt(w / 2, h / 2); this.rAO2 = rt(w / 2, h / 2);
+    this.rVis = rt(NS, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    this.rFocus = [rt(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter }), rt(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter })];
+    this.fi = 0; this.focusSnap = true;
     this.rHalfA = rt(w / 2, h / 2); this.rHalfB = rt(w / 2, h / 2);
     this.rComp = rt(w, h);
     this.down = []; this.up = [];
@@ -2702,13 +2876,35 @@ class Post {
   render() {
     renderer.setRenderTarget(this.rScene);
     renderer.render(scene, camera);
+    const depth = this.rScene.depthTexture;
+    // ピント
+    const fu = this.mFocus.uniforms;
+    fu.tDepth.value = depth; fu.tPrev.value = this.rFocus[this.fi].texture;
+    fu.uK.value = this.focusSnap || FIXED_T !== null ? 1 : 1 - Math.exp(-DT * 2.5);
+    this.pass(this.mFocus, this.rFocus[1 - this.fi]);
+    this.fi = 1 - this.fi; this.focusSnap = false;
+    this.cocU.tFocus.value = this.rFocus[this.fi].texture;
+    // 霧の中の光と、隅の暗さ
+    this.mVis.uniforms.tDepth.value = depth; this.mVis.uniforms.uTexel.value.set(1 / this.w, 1 / this.h);
+    this.pass(this.mVis, this.rVis);
+    this.mInsc.uniforms.tDepth.value = depth; this.mInsc.uniforms.tVis.value = this.rVis.texture;
+    this.pass(this.mInsc, this.rInsc);
+    if (QUALITY) {
+      this.mAO.uniforms.tDepth.value = depth; this.mAO.uniforms.uTexel.value.set(1 / this.w, 1 / this.h);
+      this.pass(this.mAO, this.rAO);
+      this.mAOBlur.uniforms.tSrc.value = this.rAO.texture; this.mAOBlur.uniforms.tDepth.value = depth; this.mAOBlur.uniforms.uTexel.value.set(2 / this.w, 2 / this.h);
+      this.pass(this.mAOBlur, this.rAO2);
+    }
+    const lu = this.mLit.uniforms;
+    lu.tColor.value = this.rScene.texture; lu.tDepth.value = depth; lu.tAO.value = this.rAO2.texture; lu.tInsc.value = this.rInsc.texture;
+    this.pass(this.mLit, this.rLit);
     const u = this.mPre.uniforms;
-    u.tColor.value = this.rScene.texture; u.tDepth.value = this.rScene.depthTexture; u.texel.value.set(1 / this.w, 1 / this.h);
+    u.tColor.value = this.rLit.texture; u.tDepth.value = this.rScene.depthTexture; u.texel.value.set(1 / this.w, 1 / this.h);
     this.pass(this.mPre, this.rHalfA);
     this.mBokeh.uniforms.tSrc.value = this.rHalfA.texture; this.mBokeh.uniforms.texel.value.set(2 / this.w, 2 / this.h);
     this.pass(this.mBokeh, this.rHalfB);
     const c = this.mComp.uniforms;
-    c.tColor.value = this.rScene.texture; c.tDepth.value = this.rScene.depthTexture; c.tBokeh.value = this.rHalfB.texture;
+    c.tColor.value = this.rLit.texture; c.tDepth.value = this.rScene.depthTexture; c.tBokeh.value = this.rHalfB.texture;
     this.pass(this.mComp, this.rComp);
     this.mBright.uniforms.tSrc.value = this.rComp.texture; this.mBright.uniforms.texel.value.set(1 / this.w, 1 / this.h);
     this.pass(this.mBright, this.down[0]);
@@ -2728,25 +2924,54 @@ class Post {
   }
 }
 const post = new Post();
+const SCATTER = LIGHTS.map((l) => ({ light: l, p: l.position, zone: l.userData.zone, down: l.userData.down, k: l.userData.scat, R: Math.min(l.distance * 0.3, 3.5) }));
+{
+  // 外から見たときだけ：明かりのついた窓のすぐ外に、霧を照らす仮の灯り
+  const win = (x, y, z, k = 1) => SCATTER.push({ fixed: new THREE.Color(1.0, 0.6, 0.28).multiplyScalar(k), p: new THREE.Vector3(x, y, z), zone: 0, down: false, k: 1, R: 1.6 });
+  for (const x of FRONT_X) { win(x, 2.15, MAIN.z1 + 0.5, 1.4); win(x, 5.3, MAIN.z1 + 0.45, 0.9); }
+  win(0, 5.3, MAIN.z1 + 0.45, 1.0);
+  win(MAIN.x0 - 0.5, 2.15, 1.8, 1.2); win(MAIN.x1 + 0.5, 2.15, 1.8, 1.2);
+  win(9.5, 1.85, CORR.z1 + 0.45, 1.0); win(14.5, 3.55, KURA.z1 + 0.6, 0.8);
+  win(-21.5, 1.6, 20.2, 1.0); win(-18.8, 1.6, 20.2, 1.0);
+}
+const busScat = [-1, 1].map((sd) => { const e = { fixed: new THREE.Color(), p: new THREE.Vector3(), zone: 0, down: false, k: 1, R: 5, bus: sd }; SCATTER.push(e); return e; });
+const _sc = new THREE.Color();
+function uploadScatter(camZone, look) {
+  const list = [];
+  for (const e of SCATTER) {
+    if (e.zone !== camZone) continue;
+    if (e.light) { const I = e.light.intensity; if (I <= 0) continue; _sc.copy(e.light.color).multiplyScalar(Math.sqrt(I) * e.k); }
+    else { if (e.fixed.r + e.fixed.g + e.fixed.b <= 0) continue; _sc.copy(e.fixed); }
+    const d = e.p.distanceTo(look);
+    list.push({ e, c: _sc.clone(), s: (_sc.r + _sc.g + _sc.b) * e.R / (1 + (d / 30) ** 2) });
+  }
+  list.sort((a, b) => b.s - a.s);
+  const u = post.scatU, n = Math.min(NS, list.length);
+  for (let i = 0; i < NS; i++) {
+    if (i < n) { const { e, c } = list[i]; u.uSP.value[i].set(e.p.x, e.p.y, e.p.z, e.R); u.uSC.value[i].set(c.r, c.g, c.b, e.down ? 1 : 0); }
+    else { u.uSP.value[i].set(0, -1e4, 0, 1); u.uSC.value[i].set(0, 0, 0, 0); }
+  }
+  u.uSN.value = n;
+}
 
 // ============================================================
 // 視点
 // ============================================================
 const VIEWS = [
   { no: '一', name: '全景', text: '雪に降り籠められた町の図書館。道の向こうから、日に数本のバスがやって来る。',
-    pos: [28, 21, 35], tgt: [3, 2.4, 0.5], fov: 34, ap: 3.2, fog: 0.011, fogCol: 0x27334b, exp: 1.05, mode: 'orbit', bloom: 0.9 },
+    pos: [28, 21, 35], tgt: [3, 2.4, 0.5], fov: 34, ap: 3.2, fog: 0.011, fogCol: 0x27334b, exp: 1.05, mode: 'orbit', bloom: 0.9, scatter: 0.011 },
   { no: '二', name: '雪の夜道', text: '街灯の下だけ、雪が光って見える。道の先で自販機の明かりがにじむ。',
-    pos: [-24, 1.85, 14.4], tgt: [10, 1.7, 13.2], fov: 40, ap: 6, focus: 15, fog: 0.028, fogCol: 0x2a364e, exp: 1.15, mode: 'look', bloom: 1.1 },
+    pos: [-24, 1.85, 14.4], tgt: [10, 1.7, 13.2], fov: 40, ap: 6, focus: 15, fog: 0.028, fogCol: 0x2a364e, exp: 1.15, mode: 'look', bloom: 1.1, scatter: 0.011 },
   { no: '三', name: '玄関', text: '軒灯の下に雪だるま。縦看板の文字は、先代の館長が書いたもの。',
-    pos: [1.7, 1.7, 15.4], tgt: [-0.2, 2.2, 5.5], fov: 42, ap: 5, fog: 0.026, fogCol: 0x2a364e, exp: 1.1, mode: 'look', bloom: 1.0 },
+    pos: [1.7, 1.7, 15.4], tgt: [-0.2, 2.2, 5.5], fov: 42, ap: 5, fog: 0.026, fogCol: 0x2a364e, exp: 1.1, mode: 'look', bloom: 1.0, scatter: 0.009 },
   { no: '四', name: '閲覧室', text: '吹き抜けの閲覧室。壁という壁が本で埋まり、窓の上を蒸気の管が走る。',
-    pos: [7.2, 3.4, 3.4], tgt: [-2.4, 1.3, -2.6], fov: 52, ap: 4, fog: 0.012, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.8 },
+    pos: [7.2, 3.4, 3.4], tgt: [-2.4, 1.3, -2.6], fov: 52, ap: 4, fog: 0.012, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.8, scatter: 0.0035 },
   { no: '五', name: 'ストーブ', text: 'だるまストーブの上で、やかんが湯気を上げている。猫はここから動かない。',
-    pos: [1.45, 1.3, 1.85], tgt: [-0.1, 1.35, -0.4], fov: 42, ap: 12, fog: 0.01, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.85 },
+    pos: [1.45, 1.3, 1.85], tgt: [-0.1, 1.35, -0.4], fov: 42, ap: 12, fog: 0.01, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.85, scatter: 0.0025 },
   { no: '六', name: '二階回廊', text: '回廊の手すり越しに、ストーブを囲む人たちを見下ろす。',
-    pos: [-5.0, 5.45, -3.85], tgt: [1.2, 0.9, 1.4], fov: 50, ap: 4, fog: 0.012, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.8 },
+    pos: [-5.0, 5.45, -3.85], tgt: [1.2, 0.9, 1.4], fov: 50, ap: 4, fog: 0.012, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.8, scatter: 0.0035 },
   { no: '七', name: '書庫', text: '土蔵を改めた書庫。郷土の古い記録が、裸電球の下で眠っている。',
-    pos: [11.7, 1.65, -1.75], tgt: [17.3, 1.5, -1.75], fov: 52, ap: 4, fog: 0.035, fogCol: 0x1e1812, exp: 1.05, mode: 'look', bloom: 0.9 },
+    pos: [11.7, 1.65, -1.75], tgt: [17.3, 1.5, -1.75], fov: 52, ap: 4, fog: 0.035, fogCol: 0x1e1812, exp: 1.05, mode: 'look', bloom: 0.9, scatter: 0.004 },
 ];
 const nav = document.getElementById('views');
 VIEWS.forEach((v, i) => {
@@ -2761,6 +2986,7 @@ const touch = () => { lastInput = performance.now(); };
 const fade = document.getElementById('fade');
 const camState = { pos: new THREE.Vector3(), tgt: new THREE.Vector3() };
 function applyView(i) {
+  if (typeof post !== 'undefined') post.focusSnap = true;
   cur = i; yaw = 0; pitch = 0; zoom = 1;
   const v = VIEWS[i];
   camState.pos.set(...v.pos); camState.tgt.set(...v.tgt);
@@ -2911,6 +3137,9 @@ function frame() {
   camera.updateProjectionMatrix();
   const focusDist = v.focus ?? camera.position.distanceTo(v.mode === 'orbit' ? camState.tgt : look);
   post.cocU.uFocus.value = focusDist;
+  post.cocU.uAuto.value = v.focus === undefined ? 1 : 0;
+  snowU.uAuto.value = post.cocU.uAuto.value;
+  snowU.tFocus.value = post.rFocus[post.fi].texture;
   // ボケの大きさは画面の高さ（描画の画素）に比例させる。視点の値は 720 画素の高さで合わせてある
   const hs = post.h / 720;
   post.cocU.uAperture.value = v.ap * hs;
@@ -2970,6 +3199,11 @@ function frame() {
   busLight.intensity = bs.on ? 60 : 0;
   for (const bm of busBeams) bm.material.uniforms.uOn.value = bs.on ? 1 : 0;
   const hx = bs.x + 3.65, inBase = (x) => (x > BASE.x0 && x < BASE.x1 ? 1 : 0);
+  for (const e of busScat) {
+    e.p.set(hx + 0.4, 0.77, 13.4 + e.bus * 0.82);
+    const on = bs.on && inBase(hx) ? 1 : 0;
+    e.fixed.setRGB(2.2 * on, 2.0 * on, 1.7 * on);
+  }
   busHaloL.position.set(hx, 0.77, 13.4 - 0.82); busHaloR.position.set(hx, 0.77, 13.4 + 0.82);
   busHaloL.visible = busHaloR.visible = bs.on && inBase(hx);
   busTail[0].position.set(bs.x - 3.65, 0.9, 13.4 - 0.95); busTail[1].position.set(bs.x - 3.65, 0.9, 13.4 + 0.95);
@@ -2979,6 +3213,15 @@ function frame() {
   snowU.uLC.value[NSL - 1].set(bs.on ? 0.9 : 0, bs.on ? 0.85 : 0, bs.on ? 0.75 : 0);
   snowU.uLR.value[NSL - 1] = 5;
 
+  camera.updateMatrixWorld();
+  const cu = post.camU;
+  cu.uInvProj.value.copy(camera.projectionMatrixInverse); cu.uProj.value.copy(camera.projectionMatrix);
+  cu.uCamWorld.value.copy(camera.matrixWorld); cu.uViewProj.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  cu.uCamPos.value.copy(camera.position);
+  post.scatU.uFogD.value = scene.fog.density;
+  // 霧の光の強さは霧の濃さに比例（屋内は空気のかすみ程度）
+  post.scatU.uScatter.value = QUALITY ? (v.scatter ?? 0.011) * (scene.fog.density / 0.02) : 0;
+  uploadScatter(camZone, v.mode === 'orbit' ? camState.tgt : look);
   post.render();
   state.frames++;
   if (state.frames === 2) {
