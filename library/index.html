@@ -189,6 +189,7 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const lerp = (a, b, t) => a + (b - a) * t;
 const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
 const PI = Math.PI, TAU = Math.PI * 2;
+const SNOW_COL_EARLY = [0.86, 0.9, 0.97];
 
 // ---------- 画面 ----------
 const canvas = document.getElementById('gl');
@@ -294,6 +295,41 @@ function patch(mat, opt = {}) {
       fs = fs.replace('#include <color_fragment>', `#include <color_fragment>
         diffuseColor.rgb *= mix( 1.0, triTex( vWPos, normalize( vWNrm ) ) * 1.25, uTriAmt );`);
     }
+    if (opt.weather) {
+      Object.assign(sh.uniforms, WU);
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute float aGrime;\nvarying float vGrime;')
+        .replace('#include <project_vertex>', '#include <project_vertex>\n vGrime = aGrime;');
+      fs = fs.replace('#include <common>', `#include <common>
+        varying float vGrime;
+        uniform sampler2D tNoise; uniform vec4 uShelter[${SHELTERS.length}]; uniform float uShelterY[${SHELTERS.length}];
+        uniform float uSnowCover; uniform vec3 uSnowCol;
+        float sheltered(vec3 p) {
+          for (int k = 0; k < ${SHELTERS.length}; k++) {
+            vec4 b = uShelter[k];
+            if (p.x > b.x && p.x < b.z && p.z > b.y && p.z < b.w && p.y < uShelterY[k]) return 1.0;
+          }
+          return 0.0;
+        }`)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+        if ( zId < 0.5 ) {
+          vec3 wn = normalize( vWNrm );
+          // 年季：大きなしみ、上から垂れた筋、足もとの濡れ色（汚れの量は頂点が持つ）
+          if ( vGrime > 0.0 ) {
+            float side = 1.0 - abs( wn.y );
+            float big = texture2D( tNoise, ( vWPos.xz + vWPos.yy * 0.7 ) * 0.035 ).r;
+            float streak = texture2D( tNoise, vec2( ( vWPos.x + vWPos.z ) * 0.9, vWPos.y * 0.035 ) ).g;
+            diffuseColor.rgb *= mix( 1.0, ( 0.68 + 0.55 * big ) * mix( 1.0, 0.72 + 0.45 * streak, side ), vGrime );
+            float damp = 1.0 - smoothstep( 0.35, 0.95, vWPos.y );
+            diffuseColor.rgb *= mix( 1.0, 0.7, damp * side * min( 1.0, vGrime * 2.5 ) );
+          }
+          // 上を向いた面には、屋根の下でなければ雪が載る（まだらに）
+          float up = smoothstep( 0.5, 0.85, wn.y ) * ( 1.0 - sheltered( vWPos ) );
+          float patchy = texture2D( tNoise, vWPos.xz * 0.6 ).b;
+          float cover = up * smoothstep( 0.25, 0.55, patchy + 0.25 ) * uSnowCover;
+          diffuseColor.rgb = mix( diffuseColor.rgb, uSnowCol, cover );
+        }`);
+    }
     if (opt.ice) {
       // 除雪された道の轍と、踏み固めた玄関の道は凍って艶が出る。街灯とバスの灯りが縦に伸びて映る
       sh.uniforms.uSkyRefl = { value: new THREE.Color(0x3a4a66) };
@@ -328,7 +364,7 @@ function patch(mat, opt = {}) {
     }
     sh.fragmentShader = fs;
   };
-  mat.customProgramCacheKey = () => 'z' + (opt.tri ? 't' : '') + (opt.sparkle ? 's' : '') + (opt.ice ? 'i' : '') + (opt.key || '');
+  mat.customProgramCacheKey = () => 'z' + (opt.tri ? 't' : '') + (opt.sparkle ? 's' : '') + (opt.ice ? 'i' : '') + (opt.weather ? 'w' : '') + (opt.key || '');
   return mat;
 }
 
@@ -445,11 +481,43 @@ function vtext(g, s, x, y, size, step, font = SERIF) {
   [...s].forEach((ch, i) => g.fillText(ch, x, y + i * step));
 }
 
+// ---------- 汚れと雪のための雑音（4 つの細かさを RGBA に焼く） ----------
+const texNoise = (() => {
+  const N = 256, d = new Uint8Array(N * N * 4);
+  const oct = (x, y, cells) => { let s = 0, a = 0.5, t = 0; for (const c of cells) { s += a * hashNoise(x * c / N, y * c / N, c); t += a; a *= 0.6; } return s / t; };
+  // 繰り返しても継ぎ目が出ないよう、格子の端で巻き戻す値雑音
+  function hashNoise(x, y, c) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const h = (a, b) => hash2(((a % c) + c) % c + c * 131, ((b % c) + c) % c + c * 71);
+    const ab = h(xi, yi) + (h(xi + 1, yi) - h(xi, yi)) * u, cd = h(xi, yi + 1) + (h(xi + 1, yi + 1) - h(xi, yi + 1)) * u;
+    return ab + (cd - ab) * v;
+  }
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4;
+    d[i] = oct(x, y, [8, 16, 32]) * 255; d[i + 1] = oct(x, y, [4, 12, 48]) * 255; d[i + 2] = oct(x, y, [24, 64, 128]) * 255; d[i + 3] = oct(x, y, [6, 20]) * 255;
+  }
+  const t = new THREE.DataTexture(d, N, N, THREE.RGBAFormat);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.needsUpdate = true;
+  return t;
+})();
+// 屋根の下（雪の載らない場所）：x0, z0, x1, z1 と、その屋根の下端の高さ
+const SHELTERS = [
+  [-8.75, -6.75, 8.75, 4.75, 7.2], [10.4, -6.7, 18.6, 1.7, 5.4], [7.9, -3.6, 11.1, 0.0, 3.1], [-2.3, 4.0, 2.3, 6.7, 3.6],
+  [9.7, 8.85, 14.3, 11.25, 2.65], [-16.5, -5.4, -12.3, -0.8, 2.4], [-23.3, 20.3, -16.7, 24.9, 3.3], [15.7, 20.7, 20.3, 24.3, 2.7],
+];
+const WU = {
+  tNoise: { value: texNoise },
+  uShelter: { value: SHELTERS.map((a) => new THREE.Vector4(a[0], a[1], a[2], a[3])) },
+  uShelterY: { value: SHELTERS.map((a) => a[4]) },
+  uSnowCover: { value: 1 },
+  uSnowCol: { value: new THREE.Color(...SNOW_COL_EARLY) },
+};
+
 // ---------- 材質 ----------
 const M = {};
-M.wood = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82 }), { tri: texBoards, triScale: 0.42 });
-M.plain = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), { tri: texMottle, triScale: 0.6, triAmt: 0.55 });
-M.metal = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.55 }), { tri: texMottle, triScale: 1.3, triAmt: 0.6 });
+M.wood = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82 }), { tri: texBoards, triScale: 0.42, weather: true });
+M.plain = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), { tri: texMottle, triScale: 0.6, triAmt: 0.55, weather: true });
+M.metal = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.55 }), { tri: texMottle, triScale: 1.3, triAmt: 0.6, weather: true });
 M.glow = new THREE.MeshBasicMaterial({ vertexColors: true });
 M.snow = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.93 }), { tri: texMottle, triScale: 0.35, triAmt: 0.18, sparkle: true });
 M.ice = patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.8 }), { key: 'ice' });
@@ -478,6 +546,7 @@ const GEO = {
   cyl: new THREE.CylinderGeometry(0.5, 0.5, 1, 14, 1),
   cyl6: new THREE.CylinderGeometry(0.5, 0.5, 1, 6, 1),
   cylOpen: new THREE.CylinderGeometry(0.5, 0.5, 1, 14, 1, true),
+  cyl4: new THREE.CylinderGeometry(0.5, 0.5, 1, 4, 1),
   cone: new THREE.ConeGeometry(0.5, 1, 12, 1),
   sph: new THREE.SphereGeometry(0.5, 14, 10),
   sphLo: new THREE.SphereGeometry(0.5, 8, 6),
@@ -524,7 +593,9 @@ function snowSlab(w, h, d, r) {
 }
 
 class Builder {
-  constructor() { this.lists = {}; this.stack = [new THREE.Matrix4()]; }
+  constructor() { this.lists = {}; this.stack = [new THREE.Matrix4()]; this.grime = 0; }
+  // 汚れの量を決めて中身を作る：withGrime(0.4, () => {...})
+  withGrime(g, fn) { const o = this.grime; this.grime = g; fn(); this.grime = o; }
   get top() { return this.stack[this.stack.length - 1]; }
   // 局所座標を重ねる：at(x,y,z,ry,()=>{...})
   at(x, y, z, ry, fn, rx = 0, rz = 0) {
@@ -538,7 +609,7 @@ class Builder {
     _e.set(rx, ry, rz, 'YXZ');
     _m.compose(_p.set(x, y, z), _q.setFromEuler(_e), _s.set(sx, sy, sz));
     const m = this.top.clone().multiply(_m);
-    (this.lists[mat] ||= []).push({ geo, m, color: toColor(color) });
+    (this.lists[mat] ||= []).push({ geo, m, color: toColor(color), grime: this.grime });
   }
   box(mat, color, w, h, d, x, y, z, ry = 0, rx = 0, rz = 0) { this.add(mat, GEO.box, color, x, y, z, w, h, d, rx, ry, rz); }
   // 下端が y の箱（置くときに便利）
@@ -550,13 +621,13 @@ class Builder {
     const mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
     const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
     _m.compose(mid, q, _s.set(r * 2, len, r * 2));
-    (this.lists[mat] ||= []).push({ geo, m: this.top.clone().multiply(_m), color: toColor(color) });
+    (this.lists[mat] ||= []).push({ geo: r < 0.016 ? GEO.cyl4 : geo, m: this.top.clone().multiply(_m), color: toColor(color), grime: this.grime });
   }
   sphere(mat, color, rx, ry, rz, x, y, z, geo = GEO.sph) { this.add(mat, geo, color, x, y, z, rx * 2, ry * 2, rz * 2); }
   geo(mat, color, geometry, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, s = 1) {
     _e.set(rx, ry, rz, 'YXZ');
     _m.compose(_p.set(x, y, z), _q.setFromEuler(_e), _s.set(s, s, s));
-    (this.lists[mat] ||= []).push({ geo: geometry, m: this.top.clone().multiply(_m), color: toColor(color) });
+    (this.lists[mat] ||= []).push({ geo: geometry, m: this.top.clone().multiply(_m), color: toColor(color), grime: this.grime });
   }
   // 雪の帽子：上面が y の場所に、幅 w・奥行 d・厚み h の柔らかい塊を載せる
   snow(w, d, h, x, y, z, ry = 0, rx = 0, rz = 0) {
@@ -585,7 +656,7 @@ class Builder {
 function mergeList(list) {
   let nv = 0, ni = 0;
   for (const it of list) { nv += it.geo.attributes.position.count; ni += it.geo.index ? it.geo.index.count : it.geo.attributes.position.count; }
-  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = new Float32Array(nv * 2), col = new Float32Array(nv * 3);
+  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = new Float32Array(nv * 2), col = new Float32Array(nv * 3), gr = new Float32Array(nv);
   const idx = new Uint32Array(ni);
   let vo = 0, io = 0;
   const v = new THREE.Vector3(), nm = new THREE.Matrix3();
@@ -599,6 +670,7 @@ function mergeList(list) {
       nor[(vo + i) * 3] = v.x; nor[(vo + i) * 3 + 1] = v.y; nor[(vo + i) * 3 + 2] = v.z;
       if (U) { uv[(vo + i) * 2] = U.getX(i); uv[(vo + i) * 2 + 1] = U.getY(i); }
       col[(vo + i) * 3] = it.color.r; col[(vo + i) * 3 + 1] = it.color.g; col[(vo + i) * 3 + 2] = it.color.b;
+      gr[vo + i] = it.grime || 0;
     }
     if (g.index) { for (let i = 0; i < g.index.count; i++) idx[io + i] = g.index.getX(i) + vo; io += g.index.count; }
     else { for (let i = 0; i < P.count; i++) idx[io + i] = vo + i; io += P.count; }
@@ -609,6 +681,7 @@ function mergeList(list) {
   out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  out.setAttribute('aGrime', new THREE.BufferAttribute(gr, 1));
   out.setIndex(new THREE.BufferAttribute(idx, 1));
   out.computeBoundingSphere();
   return out;
@@ -824,7 +897,7 @@ function wallSide(bd, side, holes, y0, y1, opt = {}) {
     };
   }
   for (const [a, b, ya, yb] of wallRects(u0, u1, y0, y1, holes)) {
-    place('out', a, b, ya, yb, opt.outColor ?? C.siding, opt.outMat ?? 'wood');
+    B.withGrime(opt.grime ?? 0.3, () => place('out', a, b, ya, yb, opt.outColor ?? C.siding, opt.outMat ?? 'wood'));
     // 内側：腰の高さまで板、上は漆喰
     const wy = (opt.wainscot ?? 1.25) + bd.floor;
     if (ya < wy) place('in', a, b, ya, Math.min(yb, wy), opt.wainColor ?? C.wainscot, 'wood');
@@ -852,7 +925,7 @@ wallSide(MAIN, 'east', eastHoles, F, MAIN.eave);
 
 // 基礎（石）
 for (const [w, d, x, z] of [[16.3, 0.4, 0, MAIN.z1 + 0.02], [16.3, 0.4, 0, MAIN.z0 - 0.02], [0.4, 10.3, MAIN.x0 - 0.02, -1], [0.4, 10.3, MAIN.x1 + 0.02, -1]]) {
-  B.block('plain', C.found, w, F + 0.05, d, x, -0.05, z);
+  B.withGrime(0.45, () => B.block('plain', C.found, w, F + 0.05, d, x, -0.05, z));
 }
 // 隅の見切り板・胴差し（白い縁）
 for (const [x, z] of [[MAIN.x0, MAIN.z0], [MAIN.x0, MAIN.z1], [MAIN.x1, MAIN.z0], [MAIN.x1, MAIN.z1]]) {
@@ -914,7 +987,7 @@ function roofPair(bd, len, xCenter, opt = {}) {
     const L = Math.hypot(run, run * bd.slope) + 0.12;
     const zc = (zEdge + bd.ridgeZ) / 2, yc = (yEdge + bd.ridgeY + 0.1) / 2 + th / 2;
     B.at(xCenter, yc, zc, 0, () => {
-      B.box(opt.mat ?? 'metal', opt.color ?? C.roof, len, th, L, 0, 0, 0);
+      B.withGrime(0.55, () => B.box(opt.mat ?? 'metal', opt.color ?? C.roof, len, th, L, 0, 0, 0));
       // 鼻隠し
       B.box('wood', opt.fascia ?? C.trim, len + 0.05, 0.28, 0.06, 0, -0.05, s * (L / 2 + 0.02));
       // 雪：厚い板を屋根なりに載せ、軒先でわずかに垂れる
@@ -1287,6 +1360,10 @@ const GAL = { y: 3.6, z0: IN.z0, z1: -3.55 };
       B.cyl('metal', VALVE, 0.055, 0.02, 0.6, 0.3, 0.04, PI / 2);
     });
   }
+  // 蒸気管の留め金（1.4m おき）と曲がり角の継ぎ手
+  for (let x = IN.x0 + 0.6; x < IN.x1 - 0.3; x += 1.4) B.box('metal', 0x5a5e64, 0.05, 0.2, 0.05, x, PIPE_Y + 0.06, IN.z1 - 0.04);
+  for (let z = -3.0; z < IN.z1 - 0.3; z += 1.4) { B.box('metal', 0x5a5e64, 0.05, 0.2, 0.05, IN.x0 + 0.04, PIPE_Y + 0.06, z); B.box('metal', 0x5a5e64, 0.05, 0.2, 0.05, IN.x1 - 0.04, PIPE_Y + 0.06, Math.min(z, -0.5)); }
+  for (const x of [IN.x0 + 0.1, IN.x1 - 0.1]) B.sphere('metal', P1, 0.06, 0.06, 0.06, x, PIPE_Y, IN.z1 - 0.1);
   // 壁の上のほうを這う電線と碍子
   for (const s of [-1, 1]) {
     const xw = s > 0 ? IN.x1 - 0.04 : IN.x0 + 0.04;
@@ -1649,7 +1726,7 @@ useRng(601);
 function streetLamp(x, z, ry, h = 5.2) {
   const y0 = groundH(x, z) - 0.2;
   B.at(x, y0, z, ry, () => {
-    B.cyl('wood', 0x4a3a2c, 0.11, h, 0, h / 2, 0, 0, 0, 0, GEO.cyl6);
+    B.withGrime(0.4, () => B.cyl('wood', 0x4a3a2c, 0.11, h, 0, h / 2, 0, 0, 0, 0, GEO.cyl6));
     B.tube('metal', 0x2a2b2e, 0.03, new THREE.Vector3(0, h - 0.3, 0), new THREE.Vector3(0, h - 0.15, 0.85));
     B.add('metal', GEO.cylOpen, 0x2f4a3a, 0, h - 0.23, 0.95, 0.5, 0.14, 0.5);
     B.add('metal', GEO.cone, 0x2f4a3a, 0, h - 0.12, 0.95, 0.52, 0.12, 0.52);
@@ -1673,7 +1750,7 @@ streetLamp(-22, 18.8, PI);
 const POLES = [-30, -12, 6, 24].map((x) => new THREE.Vector3(x, groundH(x, 19.4) - 0.2, 19.4));
 {
   for (const p of POLES) {
-    B.cyl('plain', 0x8a8780, 0.16, 9.5, p.x, p.y + 4.75, p.z, 0, 0, 0, GEO.cyl6);
+    B.withGrime(0.45, () => B.cyl('plain', 0x8a8780, 0.16, 9.5, p.x, p.y + 4.75, p.z, 0, 0, 0, GEO.cyl6));
     B.box('metal', 0x3a3b3e, 2.0, 0.12, 0.12, p.x, p.y + 8.9, p.z);
     for (const dx of [-0.85, 0, 0.85]) B.cyl('plain', 0xf2efe6, 0.05, 0.14, p.x + dx, p.y + 9.03, p.z);
     B.snowC(p.x, p.y + 9.55, p.z, 0.36, 0.14, 0.36);
@@ -1686,7 +1763,8 @@ const POLES = [-30, -12, 6, 24].map((x) => new THREE.Vector3(x, groundH(x, 19.4)
     let prev = a;
     for (let i = 1; i <= n; i++) {
       const t = i / n, p = a.clone().lerp(b, t); p.y -= Math.sin(t * PI) * s;
-      B.tube('metal', 0x15161a, 0.012, prev, p); prev = p;
+      B.tube('metal', 0x15161a, 0.012, prev, p);
+      B.tube('snow', SNOW_COL, 0.011, prev.clone().setY(prev.y + 0.014), p.clone().setY(p.y + 0.014)); prev = p;
     }
   };
   for (let i = 0; i < POLES.length - 1; i++) for (const dx of [-0.85, 0, 0.85]) {
@@ -1882,7 +1960,7 @@ useRng(651);
   B.tube('metal', 0xb87a40, 0.015, new THREE.Vector3(tx, 0.4, tz + 0.5), new THREE.Vector3(MAIN.x0 - 0.02, 0.4, tz + 0.5));
   // 物置（波板の屋根）
   const s0 = -16.2, s1 = -12.6, z0 = -5.0, z1 = -1.2, h = 2.3;
-  B.block('metal', 0x8a8070, s1 - s0, h, z1 - z0, (s0 + s1) / 2, 0, (z0 + z1) / 2);
+  B.withGrime(0.6, () => B.block('metal', 0x8a8070, s1 - s0, h, z1 - z0, (s0 + s1) / 2, 0, (z0 + z1) / 2));
   for (let x = s0 + 0.1; x < s1; x += 0.18) B.box('metal', 0x7a7060, 0.04, h - 0.1, 0.02, x, h / 2, z1 + 0.01);
   B.block('metal', 0x5a5248, 1.2, 1.9, 0.04, (s0 + s1) / 2 + 0.6, 0, z1 + 0.03);
   B.at((s0 + s1) / 2, h + 0.15, (z0 + z1) / 2, 0, () => { B.box('metal', 0x6a6a66, s1 - s0 + 0.4, 0.06, z1 - z0 + 0.6, 0, 0, 0); B.snow(s1 - s0 + 0.6, z1 - z0 + 0.8, 0.85, 0, 0.03, 0); }, 0.1);
@@ -1913,21 +1991,222 @@ useRng(651);
 useRng(661);
 {
   const hx = -20, hz = 22.6, hy = groundH(hx, hz) - 0.25;
-  B.block('wood', 0x5a4a3c, 6, 3.2, 4, hx, hy, hz);
+  B.withGrime(0.5, () => B.block('wood', 0x5a4a3c, 6, 3.2, 4, hx, hy, hz));
   B.at(hx, hy + 3.2, hz, 0, () => {
     for (const s of [-1, 1]) B.at(0, 0.9, s * 1.05, 0, () => { B.box('metal', 0x3a3d44, 6.6, 0.12, 2.7, 0, 0, 0); B.snow(6.8, 2.9, 0.9, 0, 0.05, 0); }, s * 0.7);
   });
-  for (const x of [-1.5, 1.2]) {
-    B.box('glow', [3.2, 2.0, 0.9], 1.0, 0.8, 0.02, hx + x, hy + 1.7, hz - 2.01);
-    B.box('wood', 0x2a2420, 1.1, 0.05, 0.05, hx + x, hy + 1.7, hz - 2.03);
-    B.box('wood', 0x2a2420, 0.05, 0.9, 0.05, hx + x, hy + 1.7, hz - 2.03);
-  }
   halo(hx - 1.5, hy + 1.7, hz - 2.3, 1.4, [1.0, 0.62, 0.3]); halo(hx + 1.2, hy + 1.7, hz - 2.3, 1.4, [1.0, 0.62, 0.3]);
   SNOW_LIGHTS.push({ p: new THREE.Vector3(hx, hy + 1.7, hz - 2.5), c: [1.0, 0.6, 0.3], r: 2.5 });
   const gx = 18, gz = 22.5, gy = groundH(gx, gz) - 0.3;
-  B.block('wood', 0x4a3c30, 4, 2.6, 3, gx, gy, gz);
+  B.withGrime(0.55, () => B.block('wood', 0x4a3c30, 4, 2.6, 3, gx, gy, gz));
   B.at(gx, gy + 2.8, gz, 0, () => { B.box('metal', 0x5a3a2a, 4.6, 0.1, 3.6, 0, 0, 0); B.snow(4.8, 3.8, 0.9, 0, 0.04, 0); }, 0.15);
 }
+
+// ============================================================
+// 外壁の付属品と、軒下の暮らしの小物（空いた面に、高さの帯ごとの表から抽選して置く）
+// ============================================================
+useRng(681);
+const isSheltered = (x, y, z) => SHELTERS.some(([x0, z0, x1, z1, yt]) => x > x0 && x < x1 && z > z0 && z < z1 && y < yt);
+// 落雪注意の札
+const texRakusetsu = textTex(256, 128, (g, w, h) => {
+  g.fillStyle = '#f2c230'; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#1a1612'; g.fillRect(0, 0, w, 12); g.fillRect(0, h - 12, w, 12);
+  g.font = `700 52px ${SANS}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('落雪注意', w / 2, h / 2 + 2);
+});
+M.rakusetsu = patch(new THREE.MeshStandardMaterial({ map: texRakusetsu, roughness: 0.6 }), { key: 'rakusetsu' });
+const GEO_RAKU = new THREE.PlaneGeometry(0.56, 0.28);
+// 局所座標：壁の面が z=0、外が +z。u は壁に沿う位置、y は高さ（地面からではなく絶対）
+const WALL_ITEMS = {
+  foot: [
+    [3, (u, y) => { // ポリタンク（赤か青）
+      const c = pick([0xc0302a, 0x2a5aa8]); B.block('plain', c, 0.26, 0.38, 0.36, u, y, 0.22, R(-0.2, 0.2));
+      B.cyl('plain', 0xe0d8c0, 0.035, 0.05, u + 0.06, y + 0.4, 0.22);
+    }],
+    [2, (u, y) => { // 立てかけたスコップ
+      B.tube('wood', 0x8a6a48, 0.02, new THREE.Vector3(u, y + 0.25, 0.32), new THREE.Vector3(u + 0.05, y + 1.2, 0.08));
+      B.box('metal', pick([0xd04a2a, 0x3a6a3a, 0x9aa0a6]), 0.27, 0.36, 0.02, u, y + 0.18, 0.36, 0, 0.25);
+    }],
+    [2, (u, y) => { // 漬物樽と重石
+      B.cyl('wood', 0x8a6a48, 0.22, 0.42, u, y + 0.21, 0.3); B.cyl('wood', 0x6a4a30, 0.2, 0.02, u, y + 0.43, 0.3);
+      B.sphere('plain', 0x7a7872, 0.13, 0.08, 0.12, u, y + 0.5, 0.3);
+    }],
+    [2, (u, y) => { // スタッドレスタイヤの 4 本積み
+      for (let k = 0; k < 4; k++) B.geo('plain', 0x1c1c1e, TIRE, u, y + 0.1 + k * 0.2, 0.42, PI / 2, R(0, 3), 0);
+    }],
+    [1, (u, y) => { // ビールケースと発泡スチロールの箱
+      B.block('plain', pick([0xd8b030, 0x2a6a3a]), 0.36, 0.3, 0.46, u, y, 0.3, R(-0.1, 0.1));
+      B.block('plain', 0xf0eee6, 0.4, 0.25, 0.3, u + R(-0.05, 0.05), y + 0.3, 0.3, R(-0.2, 0.2));
+    }],
+    [1, (u, y) => { // 竹ぼうき
+      B.tube('wood', 0xb89a5a, 0.015, new THREE.Vector3(u, y + 0.5, 0.25), new THREE.Vector3(u + 0.1, y + 1.5, 0.06));
+      B.add('plain', GEO.cone, 0x8a7a4a, u - 0.03, y + 0.25, 0.3, 0.3, 0.55, 0.12, PI, 0, -0.1);
+    }],
+  ],
+  waist: [
+    [2, (u, y) => { // 寒暖計
+      B.box('wood', 0xece6d6, 0.11, 0.5, 0.02, u, y + 0.25, 0.015);
+      B.box('plain', 0xb02a22, 0.012, 0.32, 0.01, u, y + 0.24, 0.03); B.sphere('plain', 0xb02a22, 0.018, 0.018, 0.01, u, y + 0.07, 0.03);
+    }],
+    [2, (u, y) => { // ガスメーターと管
+      B.block('metal', 0xb8b4aa, 0.3, 0.32, 0.17, u, y, 0.09);
+      B.cyl('glow', [0.5, 0.5, 0.45], 0.05, 0.01, u, y + 0.2, 0.18, PI / 2);
+      B.tube('metal', 0x8a8e94, 0.022, new THREE.Vector3(u + 0.1, y, 0.08), new THREE.Vector3(u + 0.1, 0.2, 0.08));
+    }],
+    [1, (u, y) => { // 消火器の箱
+      B.block('metal', 0xc02a22, 0.3, 0.55, 0.16, u, y, 0.08);
+      B.box('plain', 0xf2f0e6, 0.22, 0.07, 0.01, u, y + 0.42, 0.165);
+    }],
+    [2, (u, y) => { // FF ストーブの給排気筒（雪国の家の壁に必ずある）
+      B.cyl('metal', 0xd8d4c8, 0.075, 0.42, u, y + 0.1, 0.21, PI / 2);
+      B.block('metal', 0xd8d4c8, 0.22, 0.22, 0.12, u, y - 0.01, 0.46);
+      B.snow(0.26, 0.16, 0.06, u, y + 0.21, 0.46);
+    }],
+    [1, (u, y) => { // 張り紙（色あせた紙）
+      B.box('plain', pick([0xe8e0c8, 0xe6dcc0, 0xd8d0b8]), R(0.2, 0.3), R(0.28, 0.4), 0.004, u, y + 0.3, 0.006, 0, 0, R(-0.08, 0.08));
+    }],
+  ],
+  upper: [
+    [2, (u, y) => { // 換気扇のフード
+      B.block('metal', 0xb8b4aa, 0.32, 0.26, 0.2, u, y, 0.1); B.box('metal', 0x2a2b2e, 0.26, 0.04, 0.01, u, y + 0.03, 0.205);
+      B.snow(0.34, 0.22, 0.06, u, y + 0.26, 0.1);
+    }],
+    [2, (u, y) => { // 落雪注意の札
+      B.geo('rakusetsu', 0xffffff, GEO_RAKU, u, y + 0.2, 0.012);
+    }],
+    [1, (u, y) => { // 碍子と引込線の金具
+      B.box('metal', 0x555, 0.3, 0.03, 0.03, u, y + 0.1, 0.06);
+      for (const s of [-1, 1]) B.cyl('plain', 0xf2efe6, 0.025, 0.06, u + s * 0.1, y + 0.15, 0.06);
+    }],
+  ],
+};
+const TIRE = new THREE.TorusGeometry(0.27, 0.1, 8, 18);
+function pickW(table) { const tot = table.reduce((a, t) => a + t[0], 0); let r = rnd() * tot; for (const t of table) { if ((r -= t[0]) < 0) return t[1]; } return table[0][1]; }
+// 壁 1 面：spans は壁に沿った空き区間（世界座標の u）、place(u) でその壁の局所座標に入る
+function wallBits(spans, enter, bands = { foot: 0.7, waist: 0.6, upper: 0.5 }) {
+  for (const [a, b] of spans) {
+    for (let u = a + 0.3; u < b - 0.25; u += R(0.9, 1.4)) {
+      enter(u, (wx, wz) => {
+        const gy = groundH(wx, wz) - 0.12;
+        if (rnd() < bands.foot) pickW(WALL_ITEMS.foot)(0, gy);
+        if (rnd() < bands.waist) pickW(WALL_ITEMS.waist)(R(-0.15, 0.15), R(1.1, 1.4));
+        if (rnd() < bands.upper) pickW(WALL_ITEMS.upper)(R(-0.15, 0.15), R(2.5, 3.0));
+      });
+    }
+  }
+}
+// 正面・裏・西・東（窓・戸・ポーチ・渡り廊下・既にある物を避けた区間）
+const front = (u, fn) => B.at(u, 0, MAIN.z1, 0, () => fn(u, MAIN.z1 + 0.4));
+const back = (u, fn) => B.at(u, 0, MAIN.z0, PI, () => fn(u, MAIN.z0 - 0.4));
+const west = (u, fn) => B.at(MAIN.x0, 0, u, -PI / 2, () => fn(MAIN.x0 - 0.4, u));
+const east = (u, fn) => B.at(MAIN.x1, 0, u, PI / 2, () => fn(MAIN.x1 + 0.4, u));
+wallBits([[-7.7, -6.8], [-5.2, -4.3], [4.3, 5.2]], front, { foot: 0.8, waist: 0.6, upper: 0.4 });
+wallBits([[-7.6, -2.7], [-1.35, -0.25], [0.25, 1.35], [2.7, 7.6]], back);
+wallBits([[-5.7, -3.1], [-0.9, 1.0], [2.6, 3.8]], west);
+wallBits([[-5.7, -3.4], [-0.3, 1.0], [2.6, 3.8]], east);
+// 裏の非常階段（回廊の高さの非常口から地面へ）と、屋根の雪下ろしの梯子
+B.withGrime(0.5, () => B.at(0, 0, MAIN.z0, PI, () => {
+  const IRON = 0x2f3236, top = GAL.y, x0 = 5.6, x1 = 0.8, z = 0.75, w = 0.9, n = 14;
+  // 非常口の扉と踊り場
+  B.box('metal', 0x3a4a3a, 0.9, 1.95, 0.06, x0 + 0.4, top + 1.0, 0.03);
+  B.box('plain', 0x2a7a3a, 0.36, 0.14, 0.02, x0 + 0.4, top + 2.1, 0.07);
+  B.box('metal', IRON, 1.6, 0.06, 1.2, x0 + 0.4, top - 0.03, z);
+  B.snow(1.5, 1.1, 0.12, x0 + 0.4, top, z);
+  for (const [px, pz] of [[x0 - 0.4, 1.35], [x0 + 1.2, 1.35]]) B.box('metal', IRON, 0.07, top, 0.07, px, top / 2, pz);
+  // 段と側桁と手すり
+  for (let i = 0; i < n; i++) {
+    const t = (i + 0.5) / n, x = lerp(x0 - 0.4, x1, t), y = lerp(top, groundH(-x1, MAIN.z0 - 1), t);
+    B.box('metal', IRON, 0.26, 0.04, w, x, y, z);
+    B.snow(0.22, w - 0.06, 0.06, x, y + 0.02, z);
+  }
+  const yb = groundH(-x1, MAIN.z0 - 1);
+  for (const dz of [z - w / 2, z + w / 2]) {
+    B.tube('metal', IRON, 0.03, new THREE.Vector3(x0 - 0.4, top, dz), new THREE.Vector3(x1, yb, dz));
+    B.tube('metal', IRON, 0.02, new THREE.Vector3(x0 - 0.4, top + 0.9, dz), new THREE.Vector3(x1, yb + 0.9, dz));
+    for (let i = 0; i <= 6; i++) { const t = i / 6; B.box('metal', IRON, 0.025, 0.9, 0.025, lerp(x0 - 0.4, x1, t), lerp(top, yb, t) + 0.45, dz); }
+  }
+  B.tube('metal', IRON, 0.02, new THREE.Vector3(x0 - 0.4, top + 0.9, 1.35), new THREE.Vector3(x0 + 1.2, top + 0.9, 1.35));
+}));
+B.at(-6.4, 0, MAIN.z0, PI, () => {
+  const yb = groundH(6.4, MAIN.z0 - 1.2);
+  for (const s of [-1, 1]) B.tube('metal', 0xb8b4aa, 0.025, new THREE.Vector3(s * 0.22, yb, 1.4), new THREE.Vector3(s * 0.2, 7.2, 0.75));
+  for (let i = 1; i < 18; i++) { const t = i / 18; B.box('metal', 0xb8b4aa, 0.42, 0.03, 0.03, 0, lerp(yb, 7.2, t), lerp(1.4, 0.75, t)); }
+});
+// 軒下の落雪注意（正面の軒の下に数枚）
+for (const x of [-4.75, 4.75]) B.at(x, 0, MAIN.z1, 0, () => B.geo('rakusetsu', 0xffffff, GEO_RAKU, 0, 4.0, 0.012));
+// 土蔵の壁：鉄の鉤と、立てかけた梯子
+B.at(KURA.x1, 0, -4.8, PI / 2, () => {
+  for (const y of [2.2, 3.4]) B.box('metal', 0x2a2b2e, 0.04, 0.04, 0.12, 0, y, 0.06);
+  for (const s of [-1, 1]) B.tube('wood', 0x8a6a48, 0.025, new THREE.Vector3(s * 0.22, groundH(KURA.x1 + 0.8, -4.8), 0.8), new THREE.Vector3(s * 0.2, 4.6, 0.15));
+  for (let i = 1; i < 10; i++) { const t = i / 10; B.box('wood', 0x8a6a48, 0.42, 0.03, 0.04, 0, lerp(groundH(KURA.x1 + 0.8, -4.8), 4.6, t), lerp(0.8, 0.15, t)); }
+});
+
+// 民家の窓：障子に映る影、カーテン半分、テレビの青
+const texHouseWin = textTex(512, 128, (g, w, h) => {
+  // 0: 障子とこたつの影
+  g.fillStyle = '#ffd9a0'; g.fillRect(0, 0, 128, 128);
+  g.strokeStyle = 'rgba(80,50,20,0.55)'; g.lineWidth = 3;
+  for (let x = 0; x <= 128; x += 32) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 128); g.stroke(); }
+  for (let y = 0; y <= 128; y += 21) { g.beginPath(); g.moveTo(0, y); g.lineTo(128, y); g.stroke(); }
+  g.fillStyle = 'rgba(60,35,15,0.55)'; g.beginPath(); g.ellipse(70, 92, 20, 24, 0, 0, TAU); g.fill(); g.beginPath(); g.arc(70, 62, 11, 0, TAU); g.fill();
+  g.fillRect(20, 100, 90, 28);
+  // 1: カーテン半分と本棚の影
+  g.fillStyle = '#ffcf8a'; g.fillRect(128, 0, 128, 128);
+  g.fillStyle = 'rgba(120,40,30,0.85)'; g.fillRect(128, 0, 52, 128);
+  for (let k = 0; k < 5; k++) { g.fillStyle = 'rgba(60,35,15,0.35)'; g.fillRect(190, 20 + k * 20, 60, 12); }
+  // 2: テレビの部屋（青白い）
+  g.fillStyle = '#8fb0e0'; g.fillRect(256, 0, 128, 128);
+  g.fillStyle = 'rgba(20,30,60,0.6)'; g.beginPath(); g.ellipse(320, 100, 26, 30, 0, 0, TAU); g.fill();
+  // 3: 台所の湯気でくもった窓
+  g.fillStyle = '#ffe2b0'; g.fillRect(384, 0, 128, 128);
+  for (let k = 0; k < 120; k++) { g.fillStyle = `rgba(255,255,255,${R(0.05, 0.2)})`; g.beginPath(); g.arc(384 + R(0, 128), R(0, 128), R(2, 9), 0, TAU); g.fill(); }
+});
+const houseWinMats = [0, 1, 2, 3].map(() => new THREE.MeshBasicMaterial({ map: texHouseWin, color: new THREE.Color(2.6, 2.6, 2.6) }));
+const houseWins = [];
+function houseWindow(kind, x, y, z, w, h, ry = 0) {
+  const g = new THREE.PlaneGeometry(w, h);
+  const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setX(i, (kind + uv.getX(i)) / 4);
+  const m = new THREE.Mesh(g, houseWinMats[kind]); m.position.set(x, y, z); m.rotation.y = ry; scene.add(m);
+  houseWins.push({ m, kind });
+  B.at(x, y, z, ry, () => { B.box('wood', 0x2a2420, w + 0.1, 0.05, 0.05, 0, 0, 0.02); B.box('wood', 0x2a2420, 0.05, h, 0.05, 0, 0, 0.02); });
+}
+{
+  const hx = -20, hz = 22.6, hy = groundH(hx, hz) - 0.25;
+  houseWindow(0, hx - 1.5, hy + 1.7, hz - 2.012, 1.0, 0.8, PI);
+  houseWindow(1, hx + 1.2, hy + 1.7, hz - 2.012, 1.0, 0.8, PI);
+  houseWindow(2, hx + 2.55, hy + 1.6, hz - 2.012, 0.55, 0.5, PI);
+  houseWindow(3, hx - 3.012, hy + 1.6, hz - 0.8, 0.7, 0.6, -PI / 2);
+  // 軒下の干し柿と吊るし大根
+  for (let k = 0; k < 7; k++) {
+    const x = hx - 2.6 + k * 0.42, top = hy + 3.05, z = hz - 2.35;
+    B.tube('plain', 0xc8b890, 0.004, new THREE.Vector3(x, top, z), new THREE.Vector3(x, top - 1.0, z));
+    if (k % 3 === 2) { for (let j = 0; j < 3; j++) B.add('plain', GEO.cone, 0xece6d6, x + (j - 1) * 0.06, top - 0.55, z, 0.07, 0.6, 0.07, PI, 0, (j - 1) * 0.08); }
+    else for (let j = 0; j < 9; j++) B.sphere('plain', 0xd0601a, 0.035, 0.032, 0.035, x + (j % 2 ? 0.02 : -0.02), top - 0.1 - j * 0.1, z);
+  }
+  // 玄関わきの赤と青のポリタンクと、雪に刺したスコップ
+  B.block('plain', 0xc0302a, 0.26, 0.38, 0.36, hx + 2.2, groundH(hx + 2.2, hz - 2.5) - 0.15, hz - 2.4);
+  B.block('plain', 0x2a5aa8, 0.26, 0.38, 0.36, hx + 2.55, groundH(hx + 2.55, hz - 2.5) - 0.15, hz - 2.4, 0.2);
+}
+// 民家の窓は時刻で点いたり消えたりする（テレビはちらつく）
+function updateHouseWindows(T) {
+  for (const w of houseWins) {
+    let k = 2.6;
+    if (w.kind === 2) k = 1.6 + 0.6 * Math.sin(T * 9) * Math.sin(T * 3.1) + 0.3 * Math.sin(T * 23);
+    if (w.kind === 3) k = Math.sin(T * 0.011 + 1) > -0.6 ? 2.4 : 0.15;   // 台所はときどき消える
+    if (w.kind === 1) k = Math.sin(T * 0.007 + 4) > -0.75 ? 2.6 : 0.12;
+    w.m.material.color.setScalar(k);
+  }
+}
+
+// 軒下の暮らしの小物（裏手の軒下と、物置のまわり）
+function yardJunk(x, z, ry) {
+  const y = groundH(x, z) - 0.12;
+  B.at(x, 0, z, ry, () => {
+    pickW(WALL_ITEMS.foot)(0, y);
+    if (!isSheltered(x, y + 0.6, z)) B.snow(0.5, 0.5, 0.1, 0, y + 0.42, 0.3);
+  });
+}
+for (let x = -7.2; x < 7.2; x += R(1.0, 1.8)) if (rnd() < 0.55 && Math.abs(x) > 0.5) yardJunk(x, MAIN.z0 - 0.15, PI);
+for (const [x, z] of [[-12.2, -4.6], [-12.2, -2.4], [-16.9, -1.8], [-14.5, -0.6]]) yardJunk(x, z, x < -16 ? -PI / 2 : PI / 2);
 
 // 木：雪をかぶった杉と、葉を落とした広葉樹
 useRng(671);
@@ -2995,6 +3274,8 @@ function applyView(i) {
   cur = i; yaw = 0; pitch = 0; zoom = 1;
   const v = VIEWS[i];
   camState.pos.set(...v.pos); camState.tgt.set(...v.tgt);
+  // 確かめ用：cam=x,y,z,tx,ty,tz で好きな位置から見る
+  if (Q.has('cam')) { const c = Q.get('cam').split(',').map(Number); if (c.length === 6) { camState.pos.set(c[0], c[1], c[2]); camState.tgt.set(c[3], c[4], c[5]); } }
   scene.fog.density = v.fog; scene.fog.color.set(v.fogCol);
   post.mFinal.uniforms.uExposure.value = v.exp;
   post.mFinal.uniforms.uBloom.value = v.bloom;
@@ -3542,6 +3823,7 @@ function frame() {
     shoveler.legs[1].hip.rotation.x = 0.15;
   }
   catBody.scale.y = 1 + Math.sin(T * 1.6) * 0.04;
+  updateHouseWindows(T);
   const SOUND_WALKERS = SOUND_WALKERS_LIST;
 
   // --- バス ---
