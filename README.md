@@ -23,6 +23,7 @@
 - `tools/check-state.mjs`：区画の量の確認（速さ、何年経っても範囲に収まるか、1 区画の推移）。`node tools/check-state.mjs 20` で 20 年分
 - `package.json`：Node で `src/` のモジュールを読むための設定だけ。依存は無い
 - `.github/workflows/pages.yml`：main への push で GitHub Pages に配置
+- `library/`：別作品「雪籠りの図書館」（1 ファイルで動く。Pages では `/library/`）。説明は [library/README.md](library/README.md)
 
 ビルドは不要。JS をモジュールに分けているので `file://` では開けない。手元では静的サーバーで開く。
 

@@ -30,6 +30,8 @@ jobs:
           cp index.html manifest.json icon.svg icon-192.png icon-512.png _site/
           cp -r src _site/
           cp -r vendor/three _site/vendor/
+          mkdir -p _site/library
+          cp library/index.html _site/library/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
