@@ -64,19 +64,19 @@
 
   .controls { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: auto; min-width: 0; }
   nav#views { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-  nav#views button, #tour {
+  nav#views button, #tour, #sound {
     font: inherit; font-size: 13px; letter-spacing: 0.1em; color: var(--snow);
     background: var(--veil); border: 1px solid var(--line); border-radius: 2px;
     padding: 7px 11px 6px; cursor: pointer; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     transition: border-color 0.2s, background 0.2s, color 0.2s;
   }
   nav#views button span { font-family: var(--display); color: var(--frost); margin-right: 0.45em; }
-  nav#views button:hover, #tour:hover { border-color: rgba(242, 181, 98, 0.55); }
+  nav#views button:hover, #tour:hover, #sound:hover { border-color: rgba(242, 181, 98, 0.55); }
   nav#views button[aria-current="true"] { border-color: var(--lamp); background: var(--lamp-soft); }
   nav#views button[aria-current="true"] span { color: var(--lamp); }
   button:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
   .row2 { display: flex; gap: 10px; align-items: center; }
-  #tour[aria-pressed="true"] { border-color: var(--lamp); color: var(--lamp); }
+  #tour[aria-pressed="true"], #sound[aria-pressed="true"] { border-color: var(--lamp); color: var(--lamp); }
   .hint { font-size: 11px; color: var(--frost); letter-spacing: 0.08em; opacity: 0.8; }
 
   #loading {
@@ -129,7 +129,8 @@
   <div class="controls">
     <nav id="views" aria-label="視点の切り替え"></nav>
     <div class="row2">
-      <span class="hint">ドラッグで見回す　1〜7 で切り替え</span>
+      <span class="hint">ドラッグで見回す　1〜7 で切り替え　M で音</span>
+      <button id="sound" type="button" aria-pressed="false" aria-label="音を出す">音</button>
       <button id="tour" type="button" aria-pressed="false">巡回</button>
     </div>
   </div>
@@ -2137,7 +2138,7 @@ function poseSit(p, armsX = -0.9) {
   for (const l of p.legs) { l.hip.rotation.x = -PI / 2 + 0.08; l.knee.rotation.x = PI / 2 - 0.05; }
   for (const a of p.arms) a.rotation.x = armsX;
 }
-const tmpV = new THREE.Vector3();
+const tmpV = new THREE.Vector3(), _zp = new THREE.Vector3();
 class Walker {
   constructor(p, pts, o) {
     this.p = p; this.o = o;
@@ -2173,11 +2174,14 @@ class Walker {
     // 歩き出し・止まりぎわをなめらかに
     const ease = Math.min(1, Math.min(u - P0, P0 + T1 - u, u - P0 - T1 - P1, cyc - u) / 0.6);
     poseWalk(this.p, d * 4.2, moving ? clamp(ease, 0, 1) : 0);
+    this.ph = d * 4.2; this.moving = moving;
+    this.zone = camZoneOf(_zp.copy(this.p.root.position).setY(this.p.root.position.y + 1));
     this.p.root.visible = !(o.vanish && !moving && end === 1);
     if (o.idle && !moving) o.idle(this.p, T);
   }
 }
 const WALKERS = [];
+let PAGE_P = null;
 const SEATED = [];
 
 // 司書（カウンターと棚を往復）
@@ -2224,7 +2228,7 @@ const SEATED = [];
   const r1 = makePerson({ coat: 0x2f4a6a, pants: 0x2a2a30, hair: 0x1a1410, glasses: true });
   r1.root.position.set(-5.45, F + 0.47 - 0.88, -0.3); r1.root.rotation.y = PI / 2; poseSit(r1, -1.0);
   SEATED.push({ p: r1, fn: (p, T) => { p.neck.rotation.x = 0.45 + Math.sin(T * 0.2) * 0.05; } });
-  const r2 = makePerson({ coat: 0xb8a070, pants: 0x4a3a2a, hair: 0x4a2a1a, bun: true });
+  const r2 = PAGE_P = makePerson({ coat: 0xb8a070, pants: 0x4a3a2a, hair: 0x4a2a1a, bun: true });
   r2.root.position.set(-3.55, F + 0.47 - 0.88, 0.75); r2.root.rotation.y = -PI / 2; poseSit(r2, -1.05);
   SEATED.push({ p: r2, fn: (p, T) => {
     const k = Math.max(0, Math.sin(T * 0.9)) ** 8; // ときどき頁をめくる
@@ -2236,8 +2240,9 @@ const SEATED = [];
 }
 // 外：傘をさして道を歩く人／バス停から図書館へ来る人／雪かきをする人
 let roadWalker, shoveler;
+const ROAD_W = { p: null, ph: 0, moving: true, zone: 0 };
 {
-  roadWalker = makePerson({ coat: 0x3a3f4a, pants: 0x2a2a2a, hat: 0x6a2a2a, scarf: 0xc8b890, umbrella: true, clip: true, bag: 0x5a4030 });
+  roadWalker = ROAD_W.p = makePerson({ coat: 0x3a3f4a, pants: 0x2a2a2a, hat: 0x6a2a2a, scarf: 0xc8b890, umbrella: true, clip: true, bag: 0x5a4030 });
   const v = makePerson({ coat: 0x8a6a4a, pants: 0x2a2a30, hat: 0xe0dccf, scarf: 0x2a4a6a, umbrella: true });
   WALKERS.push(new Walker(v, [[12.4, 10.0], [2.0, 11.3], [0.35, 9.0], [0.1, 6.6]], { speed: 0.85, pause0: 10, pause1: 14, vanish: true, offset: 20, face0: PI / 2 }));
   shoveler = makePerson({ coat: 0x2a4a3a, pants: 0x2a2a30, hat: 0xc8a050, scarf: 0x8a2a2a, glove: 0x6a2a20 });
@@ -2311,10 +2316,10 @@ let busLight, busBeams = [], busHalos = [];
 function busState(T) {
   const p = (((T + 52) % 84) + 84) % 84;
   const STOP = 12.0, A = -44;
-  if (p < 20) { const u = p / 20; return { x: A + (STOP - A) * (1 - (1 - u) * (1 - u)), on: true }; }
-  if (p < 31) return { x: STOP, on: true, stopped: true };
-  if (p < 48) { const u = (p - 31) / 17; return { x: STOP + (46 - STOP) * u * u, on: true }; }
-  return { x: 60, on: false };
+  if (p < 20) { const u = p / 20; return { x: A + (STOP - A) * (1 - (1 - u) * (1 - u)), on: true, speed: ((STOP - A) * 2 * (1 - u)) / 20 }; }
+  if (p < 31) return { x: STOP, on: true, stopped: true, speed: 0 };
+  if (p < 48) { const u = (p - 31) / 17; return { x: STOP + (46 - STOP) * u * u, on: true, speed: ((46 - STOP) * 2 * u) / 17 }; }
+  return { x: 60, on: false, speed: 0 };
 }
 
 // ============================================================
@@ -3006,6 +3011,9 @@ function go(i) {
   setTimeout(() => { applyView(i); viewT0 = clock.getElapsedTime(); fade.style.opacity = 0; switching = false; }, 520);
 }
 // 巡回
+const soundBtn = document.getElementById('sound');
+soundBtn.addEventListener('click', async () => { const on = await SOUND.toggle(); soundBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+addEventListener('keydown', (e) => { if (e.key === 'm' || e.key === 'M') soundBtn.click(); });
 const tourBtn = document.getElementById('tour');
 let tourTimer = null;
 function stopTour() { if (tourTimer) clearInterval(tourTimer); tourTimer = null; tourBtn.setAttribute('aria-pressed', 'false'); }
@@ -3066,6 +3074,346 @@ function updateClockText(sec) {
 }
 
 // ============================================================
+// 音：素材はすべてここで合成する（音声ファイルは使わない）。
+// 雑音と打撃を「鳴る物」（減衰する共鳴）に通して作る。サイン波の音程や旋律は使わない。静けさが主役なので、全体に小さく。
+// ============================================================
+const VEND_POS = new THREE.Vector3(15.3, 1.28, 10.7);
+const CLOCK_POS = new THREE.Vector3(IN.x1 - 0.12, F + 2.3, -0.2);
+const SOUND = (() => {
+  const srnd = mulberry(7001);
+  const sr = () => srnd();
+  let ctx = null, on = false, bank = null, master, dry, sendBus, conv;
+  const loops = {};
+  const walkStep = new Map();
+  let lastT = null;
+
+  // --- 合成の道具（配列にその場で掛ける） ---
+  function filt(x, type, f, q = 0.7071, SR) {
+    const w = (2 * Math.PI * Math.min(f, SR * 0.45)) / SR, cw = Math.cos(w), al = Math.sin(w) / (2 * q);
+    let b0, b1, b2;
+    if (type === 'lp') { b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = b0; }
+    else if (type === 'hp') { b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = b0; }
+    else { b0 = al; b1 = 0; b2 = -al; }
+    const a0 = 1 + al, a1 = -2 * cw, a2 = 1 - al;
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < x.length; i++) {
+      const y = (b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+      x2 = x1; x1 = x[i]; y2 = y1; y1 = y; x[i] = y;
+    }
+    return x;
+  }
+  // 減衰する共鳴体：打撃を通すと「物の鳴り」になる
+  function ring(x, f, T, amp, SR, out) {
+    const r = Math.exp(-1 / (T * SR)), c = 2 * r * Math.cos((2 * Math.PI * f) / SR);
+    let y1 = 0, y2 = 0;
+    for (let i = 0; i < x.length; i++) { const y = x[i] * amp * (1 - r) + c * y1 - r * r * y2; y2 = y1; y1 = y; out[i] += y; }
+    return out;
+  }
+  const white = (n) => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = sr() * 2 - 1; return a; };
+  const brown = (n) => { const a = new Float32Array(n); let b = 0; for (let i = 0; i < n; i++) { b = b * 0.996 + (sr() * 2 - 1) * 0.06; a[i] = b; } return a; };
+  const pink = (n) => {
+    const a = new Float32Array(n); let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < n; i++) {
+      const w = sr() * 2 - 1;
+      b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+      b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+      a[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926;
+    }
+    return a;
+  };
+  // なめらかに揺れる値（0..1）
+  const wander = (n, hz, SR) => {
+    const a = new Float32Array(n), step = Math.max(1, Math.floor(SR / hz));
+    let v0 = sr(), v1 = sr();
+    for (let i = 0; i < n; i++) {
+      const k = i % step; if (k === 0 && i > 0) { v0 = v1; v1 = sr(); }
+      const t = k / step, s = t * t * (3 - 2 * t); a[i] = v0 + (v1 - v0) * s;
+    }
+    return a;
+  };
+  // ポアソン過程で散らした粒（大きさは R^pow：小さい粒が多く、たまに大きい）
+  const grains = (n, rate, SR, fn) => { let t = 0; for (;;) { t += -Math.log(1 - sr()) / rate; const i = Math.floor(t * SR); if (i >= n) break; fn(i); } };
+  const burst = (a, i, len, amp, SR, tau) => { const L = Math.floor(len * SR); for (let k = 0; k < L && i + k < a.length; k++) a[i + k] += (sr() * 2 - 1) * amp * Math.exp(-k / (tau * SR)); };
+  // 継ぎ目のない繰り返し：尻を頭に重ねて切る
+  const seamless = (x, xf, SR) => {
+    const X = Math.floor(xf * SR), L = x.length - X, o = new Float32Array(L);
+    for (let i = 0; i < L; i++) o[i] = i < X ? x[i] * (i / X) + x[L + i] * (1 - i / X) : x[i];
+    return o;
+  };
+  const rms = (x) => { let s = 0; for (let i = 0; i < x.length; i++) s += x[i] * x[i]; return Math.sqrt(s / x.length) || 1e-9; };
+  const normRms = (x, t = 0.25) => { const k = t / rms(x); for (let i = 0; i < x.length; i++) x[i] *= k; return x; };
+  const normPeak = (x, t = 0.8) => { let m = 1e-9; for (let i = 0; i < x.length; i++) m = Math.max(m, Math.abs(x[i])); const k = t / m; for (let i = 0; i < x.length; i++) x[i] *= k; return x; };
+  const soft = (x, lim) => { for (let i = 0; i < x.length; i++) x[i] = lim * Math.tanh(x[i] / lim); return x; };
+  const env = (x, a, d, SR) => { for (let i = 0; i < x.length; i++) { const t = i / SR; x[i] *= t < a ? t / a : Math.exp(-(t - a) / d); } return x; };
+  const mixInto = (o, x, k) => { for (let i = 0; i < o.length && i < x.length; i++) o[i] += x[i] * k; return o; };
+
+  // --- 素材 ---
+  function makeBank(SR) {
+    const B = {};
+    const N = (s) => Math.floor(s * SR);
+    // 部屋の静けさ（ごく低いうなり）
+    B.room = [normRms(seamless(filt(filt(brown(N(9)), 'lp', 140, 0.7071, SR), 'hp', 28, 0.7071, SR), 1, SR))];
+    // 風：低いうねりと、少し高いひゅう、ゆっくりした突風
+    B.wind = [0, 1].map(() => {
+      const n = N(15), lo = filt(brown(n), 'lp', 380, 0.7071, SR), hi = filt(pink(n), 'bp', 650, 0.8, SR), g = wander(n, 0.15, SR);
+      const o = new Float32Array(n);
+      for (let i = 0; i < n; i++) o[i] = (lo[i] * 0.7 + hi[i] * 0.35) * (0.3 + 0.7 * Math.pow(g[i], 1.5));
+      return normRms(seamless(o, 2, SR));
+    });
+    // ストーブ：ごうっという燃焼と、ぱちっ
+    {
+      const n = N(9), roar = filt(filt(brown(n), 'lp', 170, 0.7071, SR), 'hp', 35, 0.7071, SR), w = wander(n, 0.7, SR);
+      for (let i = 0; i < n; i++) roar[i] *= 0.7 + 0.3 * w[i];
+      normRms(roar, 0.25);
+      const cr = new Float32Array(n);
+      grains(n, 4.5, SR, (i) => burst(cr, i, 0.006, Math.pow(sr(), 3) * 0.9 + 0.12, SR, 0.0015));
+      filt(cr, 'bp', 2700, 0.9, SR);
+      const pop = new Float32Array(n), imp = new Float32Array(n);
+      grains(n, 0.6, SR, (i) => { imp[i] = sr() * 0.8; });
+      ring(imp, 260, 0.03, 6, SR, pop);
+      const o = new Float32Array(n); mixInto(o, roar, 1); mixInto(o, normRms(cr, 0.25), 0.45); mixInto(o, pop, 0.2);
+      B.stove = [normRms(soft(normRms(seamless(o, 1, SR)), 0.8))];
+    }
+    // やかん：かすかな沸き（笛にはしない）
+    {
+      const n = N(7), hiss = filt(pink(n), 'bp', 3000, 1.5, SR), w = wander(n, 5, SR);
+      for (let i = 0; i < n; i++) hiss[i] *= 0.5 + 0.5 * w[i];
+      // 泡は 1 つずつ高さを変える（同じ高さが並ぶと「ぽんぽん」と音程に聞こえる）。少し上へ滑る
+      const bub = new Float32Array(n);
+      grains(n, 14, SR, (i) => {
+        const f0 = 450 + Math.pow(sr(), 1.5) * 1100, T = 0.004 + sr() * 0.006, a = 0.2 + sr() * 0.8, L = Math.floor(T * 5 * SR);
+        let ph = 0;
+        for (let k = 0; k < L && i + k < n; k++) { const t = k / SR; ph += (2 * Math.PI * f0 * (1 + t * 25)) / SR; bub[i + k] += Math.sin(ph) * Math.exp(-t / T) * a; }
+      });
+      const o = new Float32Array(n); mixInto(o, normRms(hiss, 0.25), 0.6); mixInto(o, normRms(bub, 0.25), 0.7);
+      B.kettle = [normRms(soft(normRms(seamless(o, 1, SR)), 0.8))];
+    }
+    // 自販機の唸り（100Hz ごとの雑音の塊を共鳴に通す）
+    {
+      const n = N(4), src = new Float32Array(n), per = SR / 100, nz = white(n);
+      for (let i = 0; i < n; i++) { const ph = (i % per) / per; src[i] = nz[i] * Math.pow(Math.cos(Math.PI * (ph - 0.5)), 12); }
+      const o = new Float32Array(n);
+      ring(src, 180, 0.05, 2, SR, o); ring(src, 410, 0.04, 1.4, SR, o); ring(src, 1250, 0.02, 0.6, SR, o);
+      mixInto(o, filt(Float32Array.from(src), 'hp', 2500, 0.7071, SR), 0.05);
+      B.hum = [normRms(seamless(o, 0.5, SR))];
+    }
+    // バスのエンジン：短い破裂を低い共鳴に通す（音程の掃引にはしない）と、雪の路面のタイヤ
+    {
+      const n = N(2.5), imp = new Float32Array(n);
+      for (let k = 0; k * SR / 25 < n; k++) burst(imp, Math.floor(k * SR / 25 + sr() * SR * 0.004), 0.008, 0.6 + sr() * 0.4, SR, 0.003);
+      const o = new Float32Array(n);
+      ring(imp, 78, 0.08, 4, SR, o); ring(imp, 160, 0.05, 2, SR, o); ring(imp, 330, 0.03, 0.8, SR, o);
+      filt(o, 'lp', 1200, 0.7071, SR);
+      mixInto(o, normRms(filt(pink(n), 'bp', 600, 0.7, SR), 0.25), 0.35);
+      B.engine = [normRms(seamless(o, 0.4, SR))];
+      const c = new Float32Array(N(1.5)), ci = new Float32Array(c.length);
+      grains(c.length, 45, SR, (i) => { ci[i] = 0.3 + sr(); });
+      for (const f of [2500, 3300, 4200]) ring(ci, f, 0.01, 4, SR, c);
+      B.chain = [normRms(seamless(c, 0.3, SR))];
+    }
+    // ── 一回だけ鳴る音 ──
+    const shot = (len, fn) => { const o = new Float32Array(N(len)); fn(o); return [normPeak(o)]; };
+    // 柱時計のチク・タク（木の箱の鳴りを足す）
+    for (const [name, k] of [['tick', 1], ['tock', 0.94]]) {
+      B[name] = shot(0.3, (o) => { const imp = new Float32Array(o.length); imp[0] = 1; imp[1] = -0.5;
+        ring(imp, 2600 * k, 0.008, 1, SR, o); ring(imp, 1150 * k, 0.02, 0.6, SR, o); ring(imp, 420 * k, 0.05, 0.35, SR, o); });
+    }
+    // 雪を踏む「ぎゅっ」（6 種）
+    B.crunch = [];
+    for (let v = 0; v < 6; v++) {
+      const [buf] = shot(0.2, (o) => {
+        const g = new Float32Array(o.length);
+        for (let k = 0; k < 40 + v * 4; k++) { const i = Math.floor(Math.pow(sr(), 1.3) * 0.13 * SR); g[i] += (sr() - 0.5) * (1 - i / (0.14 * SR)); }
+        filt(g, 'bp', 1700 + v * 220, 0.8, SR); mixInto(o, g, 1);
+        const imp = new Float32Array(o.length); imp[0] = 1; const th = new Float32Array(o.length); ring(imp, 120, 0.03, 1, SR, th); mixInto(o, normPeak(th, 1), 0.25);
+      });
+      B.crunch.push(buf);
+    }
+    // 床板を踏む音（屋内の足音、ごく小さく）
+    B.step = [shot(0.2, (o) => { const imp = new Float32Array(o.length); imp[0] = 1; ring(imp, 140, 0.04, 1, SR, o); ring(imp, 380, 0.02, 0.4, SR, o); })[0]];
+    // 頁をめくる
+    B.page = [shot(0.3, (o) => { const n = filt(white(o.length), 'bp', 3500, 0.7, SR); env(n, 0.03, 0.08, SR); mixInto(o, n, 1); })[0]];
+    // 屋根から雪が落ちる
+    B.thud = [shot(1.0, (o) => { const n = filt(brown(o.length), 'lp', 300, 0.7071, SR); env(n, 0.02, 0.35, SR); mixInto(o, normPeak(n, 1), 1);
+      const imp = new Float32Array(o.length); imp[0] = 1; const t = new Float32Array(o.length); ring(imp, 70, 0.15, 1, SR, t); mixInto(o, normPeak(t, 1), 0.4); })[0]];
+    // エアブレーキの「ぷしゅー」と扉
+    B.psh = [shot(0.9, (o) => { const n = filt(filt(white(o.length), 'hp', 1500, 0.7071, SR), 'lp', 6000, 0.7071, SR); env(n, 0.02, 0.25, SR); mixInto(o, n, 1); })[0]];
+    B.clunk = [shot(0.4, (o) => { const imp = new Float32Array(o.length); imp[0] = 1; ring(imp, 180, 0.06, 1, SR, o); ring(imp, 520, 0.03, 0.5, SR, o); })[0]];
+    // 雪かき：こする音
+    B.scrape = [shot(0.45, (o) => { const n = filt(white(o.length), 'bp', 1100, 1, SR); env(n, 0.05, 0.12, SR); mixInto(o, n, 1); })[0]];
+    // 残響の応答（初期反射と、高い方が早く消える尾）
+    B.ir = [0, 1].map(() => {
+      const n = N(1.4), o = new Float32Array(n), lo = white(n), hi = white(n);
+      filt(lo, 'lp', 3000, 0.7071, SR); filt(hi, 'hp', 3000, 0.7071, SR);
+      for (let i = 0; i < n; i++) { const t = i / SR; o[i] = (lo[i] * Math.exp(-t / 0.35) + hi[i] * Math.exp(-t / 0.14)) * Math.min(1, t / 0.005); }
+      for (let k = 0; k < 9; k++) { const i = Math.floor((0.008 + sr() * 0.07) * SR); o[i] += (sr() - 0.5) * 0.8; }
+      return o;
+    });
+    return B;
+  }
+  const toBuffer = (c, chans) => {
+    const b = c.createBuffer(chans.length, chans[0].length, c.sampleRate);
+    chans.forEach((d, i) => b.copyToChannel(d, i));
+    return b;
+  };
+
+  // --- 配線：音源 → こもり → 大きさ → 左右 → 乾いた音と残響へ ---
+  function chain(c, buf, loop, rate = 1) {
+    const src = c.createBufferSource(); src.buffer = buf; src.loop = loop; src.playbackRate.value = rate;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = -3.0103; lp.frequency.value = 18000;
+    const g = c.createGain(); g.gain.value = 0;
+    const pan = c.createStereoPanner();
+    src.connect(lp).connect(g).connect(pan); pan.connect(dry); pan.connect(sendBus);
+    return { src, lp, g, pan };
+  }
+  function build(c) {
+    bank = makeBank(c.sampleRate);
+    const buf = {};
+    for (const k of ['room', 'stove', 'kettle', 'hum', 'engine', 'chain', 'tick', 'tock', 'step', 'page', 'thud', 'psh', 'clunk', 'scrape']) buf[k] = toBuffer(c, bank[k]);
+    buf.wind = toBuffer(c, bank.wind);
+    buf.crunch = bank.crunch.map((d) => toBuffer(c, [d]));
+    buf.ir = toBuffer(c, bank.ir);
+    master = c.createGain(); master.gain.value = 0;
+    const comp = c.createDynamicsCompressor();
+    comp.threshold.value = -10; comp.knee.value = 6; comp.ratio.value = 6; comp.attack.value = 0.006; comp.release.value = 0.3;
+    const clip = c.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < 1024; i++) { const x = (i / 1023) * 2 - 1, a = Math.abs(x); curve[i] = a < 0.8 ? x : Math.sign(x) * (0.8 + 0.2 * Math.tanh((a - 0.8) / 0.2)); }
+    clip.curve = curve; clip.oversample = '2x';
+    master.connect(comp).connect(clip).connect(c.destination);
+    dry = c.createGain(); dry.connect(master);
+    sendBus = c.createGain(); sendBus.gain.value = 0.1;
+    conv = c.createConvolver(); conv.normalize = false; conv.buffer = buf.ir;
+    const wet = c.createGain(); wet.gain.value = 0.5;
+    sendBus.connect(conv).connect(wet).connect(master);
+    for (const k of ['room', 'wind', 'stove', 'kettle', 'hum', 'engine', 'chain']) {
+      const L = chain(c, buf[k], true, k === 'wind' ? 1 : 0.97 + sr() * 0.06);
+      L.src.start(0, sr() * buf[k].duration);
+      loops[k] = L;
+    }
+    return buf;
+  }
+  let BUF = null;
+
+  // --- 置き場所から大きさ・こもり・左右を決める ---
+  const _v = new THREE.Vector3(), _r = new THREE.Vector3();
+  function place(p, zone, base, ref, camZone) {
+    _v.subVectors(p, camera.position);
+    const d = Math.max(0.3, _v.length());
+    let g = base * Math.min(1, ref / d);
+    let lp = clamp(18000 * Math.exp(-d / 45), 600, 18000);
+    if (zone !== camZone) { g *= 0.16; lp = Math.min(lp, 450); }  // 壁越し
+    _r.setFromMatrixColumn(camera.matrixWorld, 0); _r.y = 0; _r.normalize();
+    const hz = Math.hypot(_v.x, _v.z) || 1e-6;
+    const pan = clamp(((_v.x * _r.x + _v.z * _r.z) / hz) * 0.85 * Math.min(1, hz / d + 0.3), -1, 1);
+    return { g, lp, pan };
+  }
+  const set = (param, v, now) => param.setTargetAtTime(v, now, 0.12);
+  function setLoop(name, s, now, rate) {
+    const L = loops[name]; if (!L) return;
+    set(L.g.gain, s.g, now); set(L.lp.frequency, s.lp, now); set(L.pan.pan, s.pan, now);
+    if (rate) set(L.src.playbackRate, rate, now);
+  }
+  function play(buf, p, zone, base, ref, camZone, when = 0, rate = 1) {
+    if (!ctx || !on || !buf) return;
+    const s = place(p, zone, base, ref, camZone);
+    if (s.g < 0.002) return;
+    const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = -3.0103; lp.frequency.value = s.lp;
+    const g = ctx.createGain(); g.gain.value = s.g;
+    const pan = ctx.createStereoPanner(); pan.pan.value = s.pan;
+    src.connect(lp).connect(g).connect(pan); pan.connect(dry); pan.connect(sendBus);
+    src.start(ctx.currentTime + Math.max(0, when));
+  }
+  const REVERB = { 0: 0.05, 1: 0.32, 2: 0.15 };
+  const crossed = (key, v) => { const k = Math.floor(v); const prev = walkStep.get(key); walkStep.set(key, k); return prev !== undefined && k !== prev; };
+
+  function update(T, camZone, ctxInfo) {
+    if (!ctx || !on || !BUF) return;
+    const now = ctx.currentTime;
+    const out = camZone === 0;
+    set(sendBus.gain, REVERB[camZone] ?? 0.1, now);
+    // 風と部屋の静けさは場所を持たない
+    setLoop('wind', { g: out ? 0.4 : 0.09, lp: out ? 9000 : 650, pan: 0 }, now);
+    setLoop('room', { g: out ? 0.0 : 0.22, lp: 18000, pan: 0 }, now);
+    setLoop('stove', place(STOVE.clone().setY(F + 0.6), 1, 0.32, 1.5, camZone), now);
+    setLoop('kettle', place(kettleTip, 1, 0.14, 0.8, camZone), now);
+    setLoop('hum', place(VEND_POS, 0, 0.16, 1.5, camZone), now);
+    const bs = ctxInfo.bus, speed = bs.speed || 0, busOn = bs.on && bs.x > BASE.x0 - 6 && bs.x < BASE.x1 + 6 ? 1 : 0;
+    const bp = new THREE.Vector3(bs.x, 1, 13.4);
+    const eng = place(bp, 0, 0.7 * busOn, 6, camZone);
+    setLoop('engine', eng, now, 0.8 + 0.5 * Math.min(1, speed / 8));
+    const ch = place(bp, 0, 0.3 * busOn * Math.min(1, speed / 6), 6, camZone);
+    setLoop('chain', ch, now);
+
+    if (lastT !== null && FIXED_T === null && T > lastT && T - lastT < 0.5) {
+      // 柱時計：振り子が端に来るたび（周期 2 秒、T = k + 0.5）
+      const k0 = Math.floor(lastT - 0.5), k1 = Math.floor(T - 0.5);
+      for (let k = k0 + 1; k <= k1; k++) play(k % 2 ? BUF.tick : BUF.tock, CLOCK_POS, 1, 0.12, 1.2, camZone, k + 0.5 - T);
+      // 足音：外は雪を踏む音、中は床板
+      for (const w of ctxInfo.walkers) {
+        if (!w.moving || !w.p.root.visible) continue;
+        if (crossed(w, w.ph / Math.PI)) {
+          const zone = w.zone;
+          if (zone === 0) play(BUF.crunch[Math.floor(sr() * 6)], w.p.root.position, 0, 0.35, 2, camZone, 0, 0.9 + sr() * 0.2);
+          else play(BUF.step, w.p.root.position, zone, 0.06, 1.5, camZone, 0, 0.9 + sr() * 0.2);
+        }
+      }
+      // 雪かき（2 秒ごと）
+      if (crossed('shovel', T * 0.5 + 0.1)) play(BUF.scrape, ctxInfo.shovelPos, 0, 0.35, 2, camZone, 0, 0.9 + sr() * 0.2);
+      // 頁をめくる
+      if (crossed('page', (T * 0.9 - Math.PI / 2) / (2 * Math.PI))) play(BUF.page, ctxInfo.pagePos, 1, 0.1, 1.2, camZone);
+      // 屋根の雪が落ちる（67 秒に 1 回、場所は時刻から）
+      if (crossed('thud', T / 67)) {
+        const n = Math.floor(T / 67), x = -7 + hash2(n, 3) * 14;
+        play(BUF.thud, new THREE.Vector3(x, 0.5, MAIN.z1 + 0.9), 0, 0.6, 5, camZone);
+      }
+      // バス：止まるときのエアブレーキ、扉の開け閉め
+      const p = (((T + 52) % 84) + 84) % 84, pl = (((lastT + 52) % 84) + 84) % 84;
+      const at = (e) => pl < e && p >= e;
+      if (at(19.2)) play(BUF.psh, bp, 0, 0.35, 5, camZone);
+      if (at(21) || at(29.5)) play(BUF.clunk, bp, 0, 0.3, 5, camZone);
+    }
+    lastT = T;
+  }
+
+  async function toggle() {
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      BUF = build(ctx);
+    }
+    on = !on;
+    const now = ctx.currentTime;
+    if (on) {
+      await ctx.resume();
+      master.gain.cancelScheduledValues(now); master.gain.setTargetAtTime(0.3, now, 0.3);
+    } else {
+      master.gain.cancelScheduledValues(now); master.gain.setTargetAtTime(0, now, 0.05);
+      setTimeout(() => { if (!on) ctx.suspend(); }, 400);
+    }
+    return on;
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!ctx) return;
+    if (document.hidden) ctx.suspend(); else if (on) ctx.resume();
+  });
+  // 確かめ用：素材を作って、大きさと NaN の有無を返す（音は出さない）
+  function selfTest(SR = 48000) {
+    const B = makeBank(SR), outp = {};
+    const st = (a) => { let m = 0, s = 0, bad = 0; for (const v of a) { if (!Number.isFinite(v)) bad++; m = Math.max(m, Math.abs(v)); s += v * v; } return { peak: +m.toFixed(3), rms: +Math.sqrt(s / a.length).toFixed(3), sec: +(a.length / SR).toFixed(2), bad }; };
+    for (const k in B) outp[k] = (Array.isArray(B[k]) ? B[k] : [B[k]]).map(st);
+    return outp;
+  }
+  // 確かめ用：出口の大きさを測る
+  function probe() {
+    if (!ctx) return null;
+    const an = ctx.createAnalyser(); an.fftSize = 2048; master.connect(an);
+    return new Promise((res) => setTimeout(() => { const a = new Float32Array(an.fftSize); an.getFloatTimeDomainData(a); let s = 0; for (const v of a) s += v * v; res({ state: ctx.state, rms: Math.sqrt(s / a.length) }); }, 1500));
+  }
+  return { toggle, update, selfTest, makeBank, probe, isOn: () => on };
+})();
+
+// ============================================================
 // 動かす
 // ============================================================
 const T_START = performance.now();
@@ -3090,8 +3438,10 @@ function camZoneOf(p) {
   return 0;
 }
 
+const SOUND_WALKERS_LIST = [...WALKERS, ROAD_W];
 const state = { frames: 0, ready: false };
 window.__lib = state;
+state.sound = SOUND;
 let DT = 1 / 60, lastFrame = performance.now();
 function frame() {
   const nowMs = performance.now();
@@ -3181,6 +3531,7 @@ function frame() {
     roadWalker.root.position.set(x, groundH(x, 16.3) - 0.03, 16.3);
     roadWalker.root.rotation.y = PI / 2;
     poseWalk(roadWalker, x * 4.2, 1);
+    ROAD_W.ph = x * 4.2;
   }
   {
     const c = (T * 0.5) % 1, k = Math.sin(c * TAU);
@@ -3191,6 +3542,7 @@ function frame() {
     shoveler.legs[1].hip.rotation.x = 0.15;
   }
   catBody.scale.y = 1 + Math.sin(T * 1.6) * 0.04;
+  const SOUND_WALKERS = SOUND_WALKERS_LIST;
 
   // --- バス ---
   const bs = busState(T);
@@ -3199,6 +3551,7 @@ function frame() {
   busLight.intensity = bs.on ? 60 : 0;
   for (const bm of busBeams) bm.material.uniforms.uOn.value = bs.on ? 1 : 0;
   const hx = bs.x + 3.65, inBase = (x) => (x > BASE.x0 && x < BASE.x1 ? 1 : 0);
+  if (SOUND.isOn()) SOUND.update(T, camZone, { bus: bs, walkers: SOUND_WALKERS, shovelPos: shoveler.root.position, pagePos: PAGE_P.root.position });
   for (const e of busScat) {
     e.p.set(hx + 0.4, 0.77, 13.4 + e.bus * 0.82);
     const on = bs.on && inBase(hx) ? 1 : 0;
