@@ -1614,7 +1614,7 @@ useRng(441);
   wallCase(2.53, IN.z1, PI, 2.2, 0.95, 3);
 }
 
-// --- 新聞の閲覧台（北の窓の下）、新聞掛け ---
+// --- 新聞（北の机の上に広げる） ---
 useRng(451);
 const texNews = textTex(512, 360, (g, w, h) => {
   g.fillStyle = '#e6e0cf'; g.fillRect(0, 0, w, h);
@@ -1628,37 +1628,10 @@ const texNews = textTex(512, 360, (g, w, h) => {
 });
 M.news = patch(new THREE.MeshStandardMaterial({ map: texNews, roughness: 0.95, side: THREE.DoubleSide }), { key: 'news' });
 const GEO_NEWS = new THREE.PlaneGeometry(0.56, 0.4).rotateX(-PI / 2);
-{
-  B.at(3.6, F, IN.z0 + 0.27, 0, () => {
-    B.block('wood', 0x7a5232, 1.65, 0.05, 0.5, 0, 0.7, 0);
-    for (const [x, z] of [[-0.78, -0.2], [0.78, -0.2], [-0.78, 0.2], [0.78, 0.2]]) B.block('wood', 0x5a3c26, 0.05, 0.7, 0.05, x, 0, z);
-    B.box('wood', 0x5a3c26, 1.5, 0.05, 0.03, 0, 0.6, 0.2);
-    B.geo('news', 0xffffff, GEO_NEWS, -0.38, 0.753, 0.02, 0, 0.06);
-    B.geo('news', 0xffffff, GEO_NEWS, 0.34, 0.754, 0.0, 0, -0.18);
-    B.box('wood', 0x3a2618, 0.03, 0.025, 0.42, -0.68, 0.765, 0.02);
-    B.cyl('plain', 0xd8d0c0, 0.035, 0.08, 0.7, 0.79, -0.12);
-    B.at(0.05, 0.76, 0.15, 0, () => { B.geo('metal', 0x2a2a2a, new THREE.TorusGeometry(0.045, 0.006, 6, 18), 0, 0.004, 0, -PI / 2); B.box('wood', 0x3a2618, 0.12, 0.012, 0.02, 0.1, 0.004, 0.04, -0.4); });
-    // 丸い腰掛け
-    for (const x of [-0.67, 0.83]) {
-      B.cyl('wood', 0x6a4528, 0.16, 0.04, x, 0.45, 0.62);
-      for (let k = 0; k < 3; k++) { const a = k * 2.1 + 0.3; B.tube('wood', 0x4a3020, 0.016, V3(x + Math.cos(a) * 0.07, 0.43, 0.62 + Math.sin(a) * 0.07), V3(x + Math.cos(a) * 0.15, 0, 0.62 + Math.sin(a) * 0.15)); }
-    }
-  });
-  // 新聞掛け（綴じた新聞が棒に掛かっている）
-  B.at(1.95, F, -3.55, 0, () => {
-    for (const s of [-1, 1]) { B.block('wood', 0x5a3c26, 0.04, 1.3, 0.04, s * 0.32, 0, 0.12); B.block('wood', 0x5a3c26, 0.04, 1.3, 0.04, s * 0.32, 0, -0.12); B.block('wood', 0x5a3c26, 0.04, 0.04, 0.3, s * 0.32, 0.05, 0); }
-    for (let k = 0; k < 3; k++) {
-      const y = 1.22 - k * 0.1, z = -0.1 + k * 0.1;
-      B.tube('wood', 0x3a2618, 0.012, V3(-0.32, y, z), V3(0.32, y, z));
-      B.box('plain', pick([0xdcd5c2, 0xe2dccb, 0xd5ceb8]), 0.48, 0.5, 0.012, R(-0.03, 0.03), y - 0.26, z + 0.012);
-      B.box('plain', 0x3a3632, 0.4, 0.04, 0.013, 0, y - 0.1, z + 0.014);
-    }
-  });
-}
 
 // --- だるまストーブ・やかん・煙突（天井の下を東へ、壁を抜けて外で立ち上がる） ---
 useRng(461);
-const STOVE = new THREE.Vector3(3.55, F, 2.4), STOVE_DIR = -PI / 2;
+const STOVE = new THREE.Vector3(3.55, F, -0.3), STOVE_DIR = -PI / 2;   // 閲覧室のまんなか
 const STOVE_FRONT = new THREE.Vector3(Math.sin(STOVE_DIR), 0, Math.cos(STOVE_DIR));
 let stoveFire, kettleTip;
 const FLUE = { x: MAIN.x1 + 0.85, top: 7.05 };
@@ -1721,10 +1694,11 @@ const FLUE = { x: MAIN.x1 + 0.85, top: 7.05 };
   B.snowC(FLUE.x, FLUE.top + 0.36, FZ, 0.36, 0.1, 0.36);
 }
 
-// --- 閲覧机：簡素な折りたたみの長机とパイプ椅子を、塾のように北へ向けて並べる。ストーブ前の長椅子 ---
+// --- 閲覧机：折りたたみの机 1 台にパイプ椅子 2 脚で一組。村に人が少ないので、組は少ない ---
+// ストーブの北に本棚と一組（窓の前、新聞を広げる）、書庫の側に四組。人の通り道（框から東へ、東の壁ぞいに書庫の戸へ）は空けておく
 useRng(471);
-const DESKS = { xs: [2.6, 4.5], zs: [-2.9, -1.85, -0.8, 0.25], w: 1.7, d: 0.45 };
-const CHAIRS = [];   // [x, z]：座る人は北を向く
+const SETS = [[3.6, -3.55, 'news'], [2.35, 1.1], [3.8, 1.1], [2.35, 2.45], [3.8, 2.45]];   // [x, z]：机の中心。座る人は北を向く
+const CHAIRS = [];
 function pipeChair(x, z, ry, col) {
   B.at(x, F, z, ry, () => {
     const P = 0x9aa0a6;
@@ -1737,36 +1711,45 @@ function pipeChair(x, z, ry, col) {
     B.box('plain', col, 0.38, 0.15, 0.025, 0, 0.8, -0.17, 0, -0.18);
   });
 }
-function foldTable(x, z) {
+function foldTable(x, z, kind) {
   B.at(x, F, z, 0, () => {
-    const W = DESKS.w, D = DESKS.d, P = 0x9aa0a6;
+    const W = 1.1, D = 0.55, P = 0x9aa0a6;
     B.withGrime(0.15, () => B.block('plain', 0xcbb894, W, 0.025, D, 0, 0.695, 0));
     B.box('plain', 0x5a4a3a, W + 0.004, 0.012, D + 0.004, 0, 0.705, 0);     // 縁の黒い帯
     B.block('metal', 0x7a7e82, W - 0.06, 0.05, D - 0.06, 0, 0.645, 0);
     for (const s of [-1, 1]) {
-      const lx = s * (W / 2 - 0.12);
+      const lx = s * (W / 2 - 0.1);
       B.tube('metal', P, 0.016, V3(lx, 0.65, 0), V3(lx, 0.03, 0));
       B.box('metal', P, 0.035, 0.03, D - 0.05, lx, 0.015, 0);
-      B.tube('metal', P, 0.008, V3(lx, 0.3, 0), V3(lx - s * 0.32, 0.64, 0));
+      B.tube('metal', P, 0.008, V3(lx, 0.3, 0), V3(lx - s * 0.25, 0.64, 0));
     }
-    // 机の上：教科書、帳面、筆箱、鉛筆。空いている机もある
-    if (rnd() < 0.8) for (let k = 0; k < RI(1, 3); k++) {
-      const u = R(-0.7, 0.7);
-      if (rnd() < 0.5) { B.box('plain', 0xeee6d2, 0.3, 0.012, 0.21, u, 0.715, R(-0.05, 0.08), R(-0.2, 0.2)); B.box('plain', pick(BOOK_COLS), 0.31, 0.008, 0.22, u, 0.709, R(-0.05, 0.08)); }
-      else B.box('plain', pick(BOOK_COLS), 0.21, R(0.02, 0.06), 0.28, u, 0.72, R(-0.05, 0.05), R(-0.3, 0.3));
+    if (kind === 'news') {
+      // 広げた新聞と、綴じた新聞、湯呑み
+      B.geo('news', 0xffffff, GEO_NEWS, -0.22, 0.712, 0.02, 0, 0.08);
+      B.geo('news', 0xffffff, GEO_NEWS, 0.3, 0.713, -0.04, 0, -0.2);
+      B.box('wood', 0x3a2618, 0.03, 0.025, 0.42, -0.5, 0.725, 0.02);
+      B.cyl('plain', 0xd8d0c0, 0.035, 0.08, 0.45, 0.75, 0.17);
+    } else if (rnd() < 0.8) {
+      // 机の上：本、帳面、筆箱。空いている机もある
+      for (let k = 0; k < RI(1, 2); k++) {
+        const u = R(-0.4, 0.4);
+        if (rnd() < 0.5) { B.box('plain', 0xeee6d2, 0.3, 0.012, 0.21, u, 0.715, R(-0.05, 0.08), R(-0.2, 0.2)); B.box('plain', pick(BOOK_COLS), 0.31, 0.008, 0.22, u, 0.709, R(-0.05, 0.08)); }
+        else B.box('plain', pick(BOOK_COLS), 0.21, R(0.02, 0.06), 0.28, u, 0.72, R(-0.05, 0.05), R(-0.3, 0.3));
+      }
     }
-    if (rnd() < 0.5) B.box('plain', pick([0x2a5aa8, 0xc0302a, 0x3a3a3a]), 0.2, 0.03, 0.06, R(-0.6, 0.6), 0.725, -0.12, R(-0.1, 0.1));
   });
 }
 {
-  for (const z of DESKS.zs) for (const x of DESKS.xs) {
-    foldTable(x, z);
+  for (const [x, z, kind] of SETS) {
+    foldTable(x, z, kind);
     for (const s of [-1, 1]) {
-      const cx = x + s * 0.42 + R(-0.04, 0.04), cz = z + 0.42 + R(-0.02, 0.05);
-      pipeChair(cx, cz, PI + R(-0.12, 0.12), pick([0x6a3a2a, 0x5a2e24, 0x4a4a52]));
+      const cx = x + s * 0.28 + R(-0.03, 0.03), cz = z + 0.45 + R(-0.02, 0.05);
+      pipeChair(cx, cz, PI + R(-0.15, 0.15), pick([0x6a3a2a, 0x5a2e24, 0x4a4a52]));
       CHAIRS.push([cx, cz]);
     }
   }
+  // ストーブの北の本棚（背中合わせ、腰の高さより少し上）
+  B.at(STOVE.x, F, -2.15, 0, () => bookcase(2.0, 1.35, 0.5, 4, { double: true, top: true }));
   // ストーブ前の長椅子（西側）
   B.at(STOVE.x - 0.95, F, STOVE.z, 0, () => {
     B.block('wood', 0x6a4528, 0.36, 0.05, 1.05, 0, 0.42, 0);
@@ -1775,7 +1758,7 @@ function foldTable(x, z) {
   });
 }
 
-const LAMP_X = 3.55, LAMP_Z = [-3.0, -0.9, 1.3];   // 天井の飾りから下がる灯
+const LAMP_X = 3.55, LAMP_Z = [-2.9, 1.8];   // 天井の飾りから下がる灯
 // --- 閲覧室の飾り：天井の照明の台座、額（町の古地図、扁額）、柱時計、横断幕、窓辺の鉢植え ---
 useRng(481);
 {
@@ -1829,7 +1812,7 @@ useRng(481);
   const wy = CEIL - 0.03;
   const SW = -1.3;   // 壁のスイッチ（通路の西の壁）
   wire(V3(IN.x0 + 0.05, wy, SW), V3(0.1, wy, SW)); wire(V3(0.1, wy, SW), V3(0.1, wy, -2.5)); wire(V3(0.1, wy, SW), V3(0.1, wy, 2.4));
-  wire(V3(0.1, wy, -1.0), V3(LAMP_X, wy, -1.0)); wire(V3(LAMP_X, wy, LAMP_Z[0]), V3(LAMP_X, wy, LAMP_Z[LAMP_Z.length - 1]));
+  wire(V3(0.1, wy, -2.9), V3(LAMP_X, wy, -2.9)); wire(V3(LAMP_X, wy, LAMP_Z[0]), V3(LAMP_X, wy, LAMP_Z[LAMP_Z.length - 1]));
   B.tube('metal', 0x1a1a1a, 0.007, V3(IN.x0 + 0.03, F + 1.25, SW), V3(IN.x0 + 0.03, wy, SW));
   B.block('plain', 0xe8e2d0, 0.04, 0.12, 0.08, IN.x0 + 0.02, F + 1.2, SW);
   B.box('plain', 0x2a2420, 0.01, 0.03, 0.02, IN.x0 + 0.045, F + 1.27, SW);
@@ -2550,7 +2533,7 @@ function pendant(x, y, z, top, color = 0x2f4a3a, size = 0.4) {
 // 閲覧室：机の上と、南の書庫の戸の前
 LAMP_Z.forEach((z, i) => {
   rosetteLamp(LAMP_X, z, 2.62);
-  addLight(0xffcf96, [7.5, 8, 6.5][i], 8.5, LAMP_X, 2.52, z, 1);
+  addLight(0xffdcb4, [6, 6.5][i], 8, LAMP_X, 2.52, z, 1);   // 部屋の隅まではとどかない。暖かいのはストーブのまわりだけ
   halo(LAMP_X, 2.62, z, 0.72, [0.52, 0.34, 0.16]);
 });
 // カウンターの上
@@ -2773,45 +2756,40 @@ const SEATED = [];
 {
   const p = makePerson({ coat: 0x7a3a3a, pants: 0x3a3a44, apron: 0x3a4a5a, hair: 0x1a1410, bun: true, glasses: true, long: true });
   const SF = STACK.floor, DC = (STK_DOOR.x0 + STK_DOOR.x1) / 2;
-  WALKERS.push(new Walker(p, [[0.25, -2.5, F], [-0.38, -2.6, F], [-0.38, -3.75, F], [1.32, -3.75, F], [1.32, 1.0, F], [1.45, 1.35, F], [2.2, 3.3, F],
-    [DC - 0.05, 3.35, F], [DC, 3.72, F], [DC, 4.4, SF], [DC + 0.15, 5.05, SF]],
+  WALKERS.push(new Walker(p, [[0.25, -2.5, F], [-0.38, -2.6, F], [-0.38, -3.75, F], [1.32, -3.75, F], [1.32, 0.55, F], [4.85, 0.6, F], [4.85, 3.2, F],
+    [DC, 3.5, F], [DC, 3.72, F], [DC, 4.4, SF], [DC + 0.15, 5.05, SF]],
     { speed: 0.6, pause0: 14, pause1: 9, face0: PI / 2, face1: PI / 2, offset: 3,
       idle: (pp, T) => { pp.arms[1].rotation.x = -0.6 + Math.sin(T * 1.3) * 0.15; pp.arms[0].rotation.x = -0.5; pp.neck.rotation.x = 0.2; } }));
 }
-// こども（カードの引き出しの前から、南の窓の下の棚へ）
+// こども（カードの引き出しの前から、ストーブの北の本棚へ）
 {
   const p = makePerson({ coat: 0xc8502a, pants: 0x2a3a5a, hair: 0x2a1a10, hat: 0xe8d8b0, pom: 0xc8502a, scale: 0.66, long: false, boots: 0xa8332a });
   p.root.scale.setScalar(0.66);
-  WALKERS.push(new Walker(p, [[1.68, 1.6], [2.1, 1.5], [2.2, 3.2]], { speed: 0.5, y: F, pause0: 8, pause1: 10, face0: -PI / 2, face1: 0, offset: 11,
+  WALKERS.push(new Walker(p, [[1.62, 2.0], [1.55, 0.55], [1.65, -1.2], [2.85, -1.6]], { speed: 0.5, y: F, pause0: 8, pause1: 10, face0: -PI / 2, face1: PI, offset: 11,
     idle: (pp, T) => { pp.arms[0].rotation.x = -0.9; pp.arms[1].rotation.x = -0.7 + Math.sin(T * 0.9) * 0.1; pp.neck.rotation.x = 0.3; } }));
 }
-// 北の棚の前で本を探す人
+// 北の壁の棚の前で本を探す人
 {
   const p = makePerson({ coat: 0x3a4a3a, pants: 0x2a2a2a, hair: 0x5a5a5a, glasses: true, scarf: 0xd8c8a0 });
   WALKERS.push(new Walker(p, [[4.85, -3.85], [5.35, -3.85]], { speed: 0.3, y: F, pause0: 11, pause1: 9, face0: PI, face1: PI, offset: 4,
     idle: (pp, T) => { pp.arms[1].rotation.x = -1.4 + Math.sin(T * 0.7) * 0.1; pp.neck.rotation.x = -0.1; pp.neck.rotation.y = glance(61, T, 4, 0.3); } }));
 }
-// 座っている人：ストーブにあたる老人、長机で勉強する人たち（北を向く）、新聞を読む人
+// 座っている人：ストーブにあたる老人、窓の前で新聞を読む人、書庫の側の机に二人
 {
   const old = makePerson({ coat: 0x5a4a3a, pants: 0x3a3a3a, hair: 0xd8d4cc, hat: 0x3a3a3a, scarf: 0x8a3a2a });
   old.root.position.set(STOVE.x - 0.91, F + 0.47 - 0.88, STOVE.z - 0.22); old.root.rotation.y = PI / 2; poseSit(old, -1.15);
   old.arms[0].rotation.z = 0.25; old.arms[1].rotation.z = -0.25;
   SEATED.push({ p: old, fn: (p, T) => { p.neck.rotation.x = 0.25 + Math.sin(T * 0.35) * 0.12; p.neck.rotation.y = glance(11, T, 7, 0.4); p.arms[0].rotation.x = -1.15 + Math.sin(T * 0.8) * 0.06; p.arms[1].rotation.x = -1.15 + Math.sin(T * 0.8 + 1) * 0.06; } });
   const sit = (ci, o) => { const [x, z] = CHAIRS[ci]; const q = makePerson(o); q.root.position.set(x, F + 0.47 - 0.88, z - 0.05); q.root.rotation.y = PI; return q; };
-  const r1 = sit(1, { coat: 0x2f4a6a, pants: 0x2a2a30, hair: 0x1a1410, glasses: true }); poseSit(r1, -1.0);
+  const r3 = sit(0, { coat: 0x5a3a4a, pants: 0x2a2a30, hair: 0x9a9a9a, scarf: 0x6a8aa0, glasses: true }); poseSit(r3, -0.9);
+  SEATED.push({ p: r3, fn: (p, T) => { p.neck.rotation.x = 0.45 + glance(37, T, 6, 0.15); p.neck.rotation.y = glance(41, T, 5, 0.35); } });
+  const r1 = sit(3, { coat: 0x2f4a6a, pants: 0x2a2a30, hair: 0x1a1410, glasses: true }); poseSit(r1, -1.0);
   SEATED.push({ p: r1, fn: (p, T) => { const up = glance(23, T, 9, 1) > 0.75 ? 1 : 0; p.neck.rotation.x = 0.45 - up * 0.55; p.neck.rotation.y = up * 0.5; } });
-  const r2 = PAGE_P = sit(4, { coat: 0xb8a070, pants: 0x4a3a2a, hair: 0x4a2a1a, bun: true }); poseSit(r2, -1.05);
+  const r2 = PAGE_P = sit(6, { coat: 0xb8a070, pants: 0x4a3a2a, hair: 0x4a2a1a, bun: true }); poseSit(r2, -1.05);
   SEATED.push({ p: r2, fn: (p, T) => {
     const k = Math.max(0, Math.sin(T * 0.9)) ** 8; // ときどき頁をめくる
     p.arms[1].rotation.z = -0.1 - k * 0.6; p.arms[1].rotation.x = -1.05 - k * 0.2; p.neck.rotation.x = 0.5;
   } });
-  const r4 = sit(10, { coat: 0x6a6a3a, pants: 0x2a2a30, hair: 0x2a1a10, scarf: 0xb03a2a }); poseSit(r4, -1.1);
-  SEATED.push({ p: r4, fn: (p, T) => { p.neck.rotation.x = 0.55; p.arms[1].rotation.x = -1.1 + Math.sin(T * 6) * 0.04 * (glance(71, T, 3, 1) > 0 ? 1 : 0); } });
-  const r5 = sit(13, { coat: 0x3a3a4a, pants: 0x2a2a30, hair: 0x6a6a6a, glasses: true }); poseSit(r5, -0.95);
-  SEATED.push({ p: r5, fn: (p, T) => { p.neck.rotation.x = 0.4 + glance(83, T, 8, 0.2); p.neck.rotation.y = glance(89, T, 6, 0.3); } });
-  const r3 = makePerson({ coat: 0x5a3a4a, pants: 0x2a2a30, hair: 0x9a9a9a, scarf: 0x6a8aa0, glasses: true });
-  r3.root.position.set(3.6 - 0.67, F + 0.49 - 0.88, IN.z0 + 0.27 + 0.62 - 0.03); r3.root.rotation.y = PI; poseSit(r3, -0.9);
-  SEATED.push({ p: r3, fn: (p, T) => { p.neck.rotation.x = 0.45 + glance(37, T, 6, 0.15); p.neck.rotation.y = glance(41, T, 5, 0.35); } });
 }
 // 外：傘をさして道を歩く人／バス停から図書館へ来る人／雪かきをする人
 let roadWalker, shoveler;
@@ -3554,10 +3532,10 @@ const VIEWS = [
     pos: [-24, 1.85, 14.4], tgt: [10, 1.7, 13.2], fov: 40, ap: 6, focus: 15, fog: 0.028, fogCol: 0x2a364e, exp: 1.15, mode: 'look', bloom: 1.1, scatter: 0.011 },
   { no: '三', name: '玄関', text: '庇の下で、古い蛍光灯がときどきまたたく。縦看板の文字は、先代の館長が書いたもの。',
     pos: [1.9, 1.65, 13.2], tgt: [-0.3, 2.3, 4.0], fov: 42, ap: 5, fog: 0.026, fogCol: 0x2a364e, exp: 1.1, mode: 'look', bloom: 1.0, scatter: 0.009 },
-  { no: '四', name: '閲覧室', text: '長机とパイプ椅子が塾のように並ぶ閲覧室。壁という壁が本で埋まり、天井の飾りから乳白の灯が下がる。',
-    pos: [5.35, 2.2, 3.55], tgt: [2.0, 1.1, -2.2], fov: 62, ap: 4, fog: 0.012, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.7, scatter: 0.0035 },
+  { no: '四', name: '閲覧室', text: 'がらんとした閲覧室。机はわずかで、ストーブのまわりだけが暖かい。',
+    pos: [5.1, 2.1, 3.55], tgt: [2.2, 1.1, -2.0], fov: 60, ap: 4, fog: 0.012, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.7, scatter: 0.0035 },
   { no: '五', name: 'ストーブ', text: 'だるまストーブの上で、やかんが湯気を上げている。猫はここから動かない。',
-    pos: [4.95, 1.95, 0.75], tgt: [2.85, 1.05, 2.6], fov: 50, ap: 4, fog: 0.01, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.85, scatter: 0.0025 },
+    pos: [4.95, 1.95, -1.95], tgt: [2.85, 1.05, -0.1], fov: 50, ap: 4, fog: 0.01, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.85, scatter: 0.0025 },
   { no: '六', name: '土間・上がり框', text: '五歩の土間で靴を脱いで上がる。また五歩で、司書のいる丸いカウンター。',
     pos: [0.6, 1.4, 3.65], tgt: [-0.45, 1.3, 0.4], fov: 58, ap: 3, fog: 0.012, fogCol: 0x2a2218, exp: 1.0, mode: 'look', bloom: 0.8, scatter: 0.0035 },
   { no: '七', name: '書庫', text: 'コンクリートの書庫は、足もとからひんやりする。郷土の古い記録が、裸電球の下で眠っている。',
